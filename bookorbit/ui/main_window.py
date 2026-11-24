@@ -1,0 +1,123 @@
+"""MainWindow - navy role-based sidebar + content area (SRS 4.24, Section 5)."""
+import tkinter as tk
+from tkinter import ttk
+
+from bookorbit import rules
+from bookorbit.services.session import Session
+from bookorbit.ui import screens
+from bookorbit.ui.widgets import BG, FONT, NAVY, NAVY_HI, ORANGE, setup_styles
+
+ROLE_NAMES = {rules.VISITOR: "Visitor", rules.RC: "Registered Customer",
+              rules.VC: "VIP Customer", rules.SU: "Super-User"}
+
+# Sidebar items per role (SRS 4.24 MainWindow.build_sidebar). Each maps to (screen, kwargs).
+# Screens not built yet open a clearly marked placeholder naming the phase that adds them.
+SIDEBAR = {
+    rules.VISITOR: [("Home", "home", {}), ("Browse", "catalog", {}),
+                    ("Search", "catalog", {"focus_search": True}), ("Top Books", "home", {}),
+                    ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12"}),
+                    ("Sign In", "login", {}), ("Register", "register", {})],
+    rules.RC: [("Home", "home", {}), ("Browse", "catalog", {}),
+               ("Recommendations", "placeholder", {"title": "Recommendations", "phase": 3, "uc": "UC-06"}),
+               ("My Orders", "placeholder", {"title": "My Orders", "phase": 2, "uc": "UC-08"}),
+               ("My Reviews", "placeholder", {"title": "My Reviews", "phase": 2, "uc": "UC-10/11"}),
+               ("My Balance", "wallet", {}),
+               ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12"}),
+               ("Sign Out", "logout", {})],
+    rules.SU: [("Home", "home", {}),
+               ("Manage Books", "placeholder", {"title": "Manage Books", "phase": 4, "uc": "UC-15"}),
+               ("Manage Taboo Words", "placeholder", {"title": "Manage Taboo Words", "phase": 4, "uc": "UC-16"}),
+               ("User Management", "placeholder", {"title": "User Management", "phase": 4, "uc": "UC-17"}),
+               ("Reports", "placeholder", {"title": "Reports", "phase": 4, "uc": "UC-18"}),
+               ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12/13"}),
+               ("Sign Out", "logout", {})],
+}
+SIDEBAR[rules.VC] = SIDEBAR[rules.RC]
+WALLET_ONLY = [("My Balance", "wallet", {}), ("Sign Out", "logout", {})]   # R8
+
+SCREENS = {
+    "home": screens.HomeScreen, "catalog": screens.CatalogScreen, "book": screens.BookDetailScreen,
+    "login": screens.LoginScreen, "register": screens.RegisterScreen, "wallet": screens.WalletScreen,
+    "placeholder": screens.PlaceholderScreen,
+}
+
+
+class MainWindow(tk.Tk):
+    def __init__(self, ctx):
+        super().__init__()
+        self.ctx = ctx
+        self.session = Session(ctx.fs)          # starts as a Visitor
+        self.flash = None                       # (text, kind) shown by the next screen
+        self.current = None
+        self.title("BookOrbit AI")
+        self.geometry("1200x800")
+        self.minsize(1100, 720)
+        self.configure(bg=BG)
+        setup_styles(self)
+        self.sidebar = tk.Frame(self, bg=NAVY, width=210)
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
+        self.content = ttk.Frame(self, padding=20)
+        self.content.pack(side="left", fill="both", expand=True)
+        self.build_sidebar()
+        self.show("home")
+
+    # ---------------------------------------------------------------- sidebar
+    def build_sidebar(self, active: str = "Home") -> None:
+        for w in self.sidebar.winfo_children():
+            w.destroy()
+        tk.Label(self.sidebar, text="BookOrbit AI", bg=NAVY, fg="white",
+                 font=(FONT, 18, "bold"), pady=18).pack(fill="x")
+        s = self.session
+        who = (f"{s.user['full_name']}\n{ROLE_NAMES[s.role]}" if s.user else "Browsing as Visitor")
+        if s.wallet_only:
+            who += "\nSUSPENDED"
+        tk.Label(self.sidebar, text=who, bg=NAVY, fg=ORANGE if s.role == rules.VC else "#c9d1e3",
+                 font=(FONT, 11), justify="left", anchor="w", padx=18).pack(fill="x", pady=(0, 12))
+        items = WALLET_ONLY if s.wallet_only else SIDEBAR[s.role]
+        for label, screen, kwargs in items:
+            bg = NAVY_HI if label == active else NAVY
+            btn = tk.Label(self.sidebar, text=label, bg=bg, fg="white", font=(FONT, 13),
+                           anchor="w", padx=18, pady=8, cursor="hand2")
+            btn.pack(fill="x")
+            btn.bind("<Button-1>", lambda _e, l=label, sc=screen, kw=kwargs: self._nav(l, sc, kw))
+        if self.ctx.bio.is_mock:
+            tk.Label(self.sidebar, text="MOCK biometrics\n(see docs/ASSUMPTIONS.md)", bg=NAVY,
+                     fg="#8f9bb8", font=(FONT, 10), justify="left", padx=18).pack(side="bottom", anchor="w", pady=12)
+
+    def _nav(self, label, screen, kwargs):
+        if screen == "logout":
+            self.on_logout()
+            return
+        self.build_sidebar(active=label)
+        self.show(screen, **kwargs)
+
+    # ---------------------------------------------------------------- screens
+    def show(self, name: str, **kwargs) -> None:
+        # R8: a suspended customer may only use the wallet
+        if self.session.wallet_only and name != "wallet":
+            name, kwargs = "wallet", {}
+        for w in self.content.winfo_children():
+            w.destroy()
+        screen = SCREENS[name](self.content, self, **kwargs)
+        screen.pack(fill="both", expand=True)
+        screen.render()
+        self.current = screen
+
+    def set_flash(self, text: str, kind: str = "info") -> None:
+        self.flash = (text, kind)
+
+    def on_login(self, session) -> None:
+        self.session = session
+        self.set_flash(f"Welcome, {session.user['full_name']}!", "ok")
+        if session.wallet_only:   # UC-02 E4
+            self.set_flash("Your account is SUSPENDED: only My Balance is available. Deposit until your "
+                           "balance is at least $0.00, then a Super-User can reactivate you (R8).", "warn")
+        self.build_sidebar("My Balance" if session.wallet_only else "Home")
+        self.show("home")
+
+    def on_logout(self) -> None:
+        self.ctx.auth.logout(self.session)
+        self.set_flash("You have signed out.", "info")
+        self.build_sidebar()
+        self.show("home")
