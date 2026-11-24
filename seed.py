@@ -111,6 +111,23 @@ DEMO_USERS = [
     ("eli", "Eli Novak", rules.RC, 120),
     ("fay", "Fay Lindqvist", rules.RC, 260),
 ]
+# Decision A-11 / Phase 3: 10 books (one per category) get a short original text in
+# seed_texts/, written for this project, so the Reading Companion (UC-14) and the RAG
+# index have something to read. The other 40 books have no text (UC-14 E1).
+SEED_TEXTS = PROJECT_ROOT / "seed_texts"
+BOOK_TEXTS = {
+    "The Lantern Keeper's Daughter": "the_lantern_keepers_daughter.txt",
+    "The Clockmaker's Alibi": "the_clockmakers_alibi.txt",
+    "Orbit of the Glass Moons": "orbit_of_the_glass_moons.txt",
+    "The Dragon Who Collected Maps": "the_dragon_who_collected_maps.txt",
+    "The Bookshop Proposal": "the_bookshop_proposal.txt",
+    "Bridges of the Industrial Age": "bridges_of_the_industrial_age.txt",
+    "The Woman Who Measured Storms": "the_woman_who_measured_storms.txt",
+    "Small Steps, Steady Days": "small_steps_steady_days.txt",
+    "The Secret Life of Fungi": "the_secret_life_of_fungi.txt",
+    "Paper Boats and Thunder": "paper_boats_and_thunder.txt",
+}
+
 # Balances each customer ends the seed with (alice and victor deposit extra to pay for
 # their purchases first, so they end exactly here).
 END_BALANCE = {"alice": 50.0, "victor": 120.0, "wes": 20.0}
@@ -185,9 +202,11 @@ def main() -> None:
         shutil.rmtree(data_dir)
     ctx = build_context(cfg)
     fs = ctx.fs
-    for sub in ("covers", "samples", "biometrics"):
+    for sub in ("covers", "samples", "biometrics", "texts"):
         (data_dir / sub).mkdir(parents=True, exist_ok=True)
     samples = data_dir / "samples"
+    # store policies: the chatbot's POLICY chunks (SRS 4.21 build_index reads data/policies.txt)
+    shutil.copyfile(SEED_TEXTS / "policies.txt", data_dir / "policies.txt")
 
     # --- users (+ biometric templates enrolled through the same engine as UC-01) ---
     users, minute = {}, 0
@@ -230,12 +249,16 @@ def main() -> None:
             kws = RNG.sample(KEYWORDS[category], 3)
             cover = data_dir / "covers" / f"{bid}.png"
             cover.write_bytes(make_cover(bid, ci))
+            text_path = None
+            if title in BOOK_TEXTS:                       # UC-14 / R15: book with a full text
+                text_path = f"texts/{bid}.txt"            # relative to data/, like cover_path
+                shutil.copyfile(SEED_TEXTS / BOOK_TEXTS[title], data_dir / text_path)
             fs.append("books", {
                 "book_id": bid, "title": title, "author": author, "category": category,
                 "keywords": ", ".join(kws), "pub_year": RNG.randint(1950, 2025),
                 "price": round(RNG.choice([4.99, 7.99, 9.99, 12.99, 14.99, 16.99, 19.99, 24.99, 34.99]), 2),
                 "description": BLURB[category].format(k1=kws[0], k2=kws[1]),
-                "cover_path": f"covers/{bid}.png", "cover_vec_path": None, "text_path": None,
+                "cover_path": f"covers/{bid}.png", "cover_vec_path": None, "text_path": text_path,
                 "added_by": su_id, "browse_count": RNG.randint(0, 60), "purchase_count": 0,
                 "rating_count": 0, "weighted_avg": 0.0, "list_status": rules.LIST_NONE,
                 "indexed": False, "added_at": ts(minute)})

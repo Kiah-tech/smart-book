@@ -31,6 +31,11 @@ class SeedTests(unittest.TestCase):
                 self.assertEqual(txns[-1]["balance_after"] if txns else 0.0, u["balance"], u["username"])
             verified = [r for r in fs.load("reviews") if r["verified_buyer"]]
             self.assertTrue(verified and all(r["weight"] == rules.W_VERIFIED for r in verified))
+            # Phase 3: 10 books carry a text (A-11), the rest none (UC-14 E1); policies for the chatbot
+            with_text = [b for b in fs.load("books") if b["text_path"]]
+            self.assertEqual(len(with_text), len(seed.BOOK_TEXTS))
+            self.assertTrue(all(fs.resolve(b["text_path"]).exists() for b in with_text))
+            self.assertTrue((fs.dir / "policies.txt").exists())
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
