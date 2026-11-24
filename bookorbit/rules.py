@@ -20,7 +20,7 @@ MIN_VOICE_SECONDS = 2.0
 POPULAR_PURCHASE_WEIGHT = 3
 HOME_BOOK_COUNT = 3
 
-# R4 - personalized profile weights (used in Phase 3)
+# R4 - personalized profile weights: a purchase counts 3, a view 1
 PROFILE_W_BUY = 3
 PROFILE_W_VIEW = 1
 

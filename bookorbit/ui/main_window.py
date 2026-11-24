@@ -21,7 +21,7 @@ SIDEBAR = {
                     ("AI Chatbot", "chat", {}),
                     ("Sign In", "login", {}), ("Register", "register", {})],
     rules.RC: [("Home", "home", {}), ("Browse", "catalog", {}),
-               ("Recommendations", "placeholder", {"title": "Recommendations", "phase": 3, "uc": "UC-06"}),
+               ("Recommendations", "recommendations", {}),
                ("My Orders", "orders", {}), ("My Reviews", "my_reviews", {}),
                ("My Balance", "wallet", {}),
                ("AI Chatbot", "chat", {}),
@@ -41,7 +41,7 @@ SCREENS = {
     "home": screens.HomeScreen, "catalog": screens.CatalogScreen, "book": screens.BookDetailScreen,
     "login": screens.LoginScreen, "register": screens.RegisterScreen, "wallet": screens.WalletScreen,
     "orders": screens.OrdersScreen, "my_reviews": screens.MyReviewsScreen,
-    "chat": screens.ChatScreen, "companion": screens.CompanionScreen,
+    "recommendations": screens.RecommendationsScreen, "chat": screens.ChatScreen, "companion": screens.CompanionScreen,
     "placeholder": screens.PlaceholderScreen,
 }
 

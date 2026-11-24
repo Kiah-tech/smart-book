@@ -72,9 +72,10 @@ class HomeScreen(Screen):
 
         title, books = self.ctx.recs.home_books(self.session)
         ttk.Label(self, text=title, style="H2.TLabel").pack(anchor="w")
-        if self.session.is_customer:
-            ttk.Label(self, text="Personalized recommendations (UC-06) arrive in Phase 3; until then the "
-                                 "SRS fallback shows popular books.", style="Muted.TLabel").pack(anchor="w")
+        if self.session.is_customer:                     # UC-06
+            note = ("Based on the books you bought and viewed (R4)." if title == "Recommended for You" else
+                    "View or buy a few books and we'll recommend more like them (UC-06 E1).")
+            ttk.Label(self, text=note, style="Muted.TLabel").pack(anchor="w")
         cards = ttk.Frame(self)
         cards.pack(anchor="w", pady=10)
         if not books:
@@ -89,6 +90,46 @@ class HomeScreen(Screen):
             bal = self.ctx.wallet.get_balance(self.session.user["user_id"])
             ttk.Label(box, text=f"${bal:,.2f}", style="Card.TLabel", font=(FONT, 22, "bold")).pack(anchor="w")
             ttk.Button(box, text="Open My Balance", command=lambda: self.app.show("wallet")).pack(anchor="w", pady=4)
+
+
+# ---------------------------------------------------------------- Recommendations (UC-06, R4)
+class RecommendationsScreen(Screen):
+    def build(self):
+        ttk.Label(self, text="Recommendations", style="H1.TLabel").pack(anchor="w")
+        if not self.session.is_customer:
+            ttk.Label(self, text="Recommendations are for signed-in customers.", style="Muted.TLabel").pack(anchor="w")
+            return
+        uid = self.session.user["user_id"]
+        title, books = self.ctx.recs.home_books(self.session)
+        profile = self.ctx.recs.build_profile(uid)
+        ttk.Label(self, text=title, style="H2.TLabel").pack(anchor="w", pady=(8, 0))
+        if not profile:
+            ttk.Label(self, text="No history yet: these are popular books. View or buy a few books and "
+                                 "we'll recommend more like them (UC-06 E1).", style="Muted.TLabel").pack(anchor="w")
+        cards = ttk.Frame(self)
+        cards.pack(anchor="w", pady=10)
+        for b in books:
+            col = ttk.Frame(cards)
+            col.pack(side="left", padx=(0, 14), anchor="n")
+            BookCard(col, b, self.open_book, self.images, self.ctx.fs.resolve(b["cover_path"])).pack()
+            why = self.ctx.recs.reasons(b, profile)
+            ttk.Label(col, text=("Matches: " + ", ".join(why)) if why else "Popular pick",
+                      style="Muted.TLabel", wraplength=146, font=(FONT, 10)).pack(anchor="w", pady=(4, 0))
+        if profile:
+            ttk.Label(self, text="Your interests", style="H2.TLabel").pack(anchor="w", pady=(10, 2))
+            ttk.Label(self, text=f"Each purchase adds {rules.PROFILE_W_BUY} points and each view "
+                                 f"{rules.PROFILE_W_VIEW} point to the book's category, author and keywords (R4).",
+                      style="Muted.TLabel").pack(anchor="w")
+            tree = ttk.Treeview(self, columns=("term", "points"), show="headings", height=8)
+            tree.heading("term", text="Interest")
+            tree.heading("points", text="Points")
+            tree.column("term", width=320)
+            tree.column("points", width=90, anchor="e")
+            kinds = {"cat": "Category", "auth": "Author", "kw": "Keyword"}
+            for term, pts in profile.most_common(8):
+                kind, value = term.split(":", 1)
+                tree.insert("", "end", values=(f"{kinds[kind]}: {value}", pts))
+            tree.pack(anchor="w")
 
 
 # ---------------------------------------------------------------- Catalog (UC-04)

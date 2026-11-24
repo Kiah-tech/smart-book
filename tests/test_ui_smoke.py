@@ -1,6 +1,7 @@
 """Opens every Phase 1 screen for every role in a real Tk window (then closes it).
 Skipped automatically when no display is available."""
 import tkinter as tk
+from tkinter import ttk
 import unittest
 
 from bookorbit import rules
@@ -91,6 +92,11 @@ class UISmokeTests(TempStoreCase):
         self.assertEqual(r.source, "RAG")
         self.assertIn("[Store data] · MOCK AI", self.win.current.log.get("1.0", "end"))
         self.companion_flows()
+        self.win.show("recommendations")                                  # UC-06 with history
+        self.win.update()
+        labels = [w.cget("text") for w in self.win.current.winfo_children() if isinstance(w, ttk.Label)]
+        self.assertIn("Recommended for You", labels)
+        self.assertIn("Your interests", labels)
 
     def companion_flows(self):
         """UC-14: preview (R15), E2 + Buy, then every chapter and the AI tools."""
