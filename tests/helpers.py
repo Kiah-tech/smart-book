@@ -4,7 +4,9 @@ import tempfile
 import unittest
 
 from bookorbit.app_context import build_context
+from bookorbit import rules
 from bookorbit.config import DEFAULTS
+from bookorbit.services.session import Session
 from seed import make_face_photo, make_voice
 
 
@@ -34,3 +36,25 @@ class TempStoreCase(unittest.TestCase):
              "weighted_avg": 0.0, "list_status": "NONE", "indexed": False, "added_at": "2026-11-01 10:00:00"}
         b.update(over)
         return self.fs.append("books", b)
+
+    def add_user(self, username="pat", role=rules.RC, status=rules.ACTIVE, balance=0.0, **over):
+        """A customer record written straight to users.txt (no biometrics needed)."""
+        u = {"user_id": self.fs.next_id("users", "U"), "username": username, "full_name": username.title(),
+             "email": f"{username}@x.com", "role": role, "status": status, "balance": balance, "warnings": 0,
+             "purchase_count": 0, "total_spent": 0.0, "promo_purchases": 0, "promo_spent": 0.0,
+             "created_at": "2026-11-01 10:00:00"}
+        u.update(over)
+        return self.fs.append("users", u)
+
+    def session_for(self, user: dict) -> Session:
+        s = Session(self.fs)
+        s.start(self.fs.find("users", "user_id", user["user_id"]))
+        return s
+
+    def user(self, user: dict) -> dict:
+        """Fresh copy of a user record."""
+        return self.fs.find("users", "user_id", user["user_id"])
+
+    def taboo(self, *words):
+        for w in words:
+            self.fs.append("taboo_words", {"word": w, "added_by": "U-0001", "added_at": "2026-11-01 10:00:00"})

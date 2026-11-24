@@ -1,4 +1,4 @@
-"""Phase 1 screens (SRS 4.24). Screens only display data and forward actions to
+"""Screens (SRS 4.24). Screens only display data and forward actions to
 services; every handler catches the service's named error and shows its
 message in the banner. No business rules live here."""
 import tkinter as tk
@@ -7,10 +7,10 @@ from tkinter import filedialog, ttk
 
 from bookorbit import rules
 from bookorbit.ai.biometrics import FACE, VOICE
-from bookorbit.errors import (LoginError, NoFaceError, NotFound, NoVoiceError, RegistrationError,
+from bookorbit.errors import (LoginError, NoFaceError, NotFound, NoVoiceError, PurchaseError, RegistrationError,
                               TemplateMissingError)
 from bookorbit.services.catalog import FIELDS
-from bookorbit.ui.widgets import (CARD, FONT, MUTED, NAVY, RED, Banner, BookCard, ScrollFrame, draw_cover,
+from bookorbit.ui.widgets import (CARD, FONT, GREEN, MUTED, NAVY, RED, Banner, BookCard, ScrollFrame, draw_cover,
                                   Tooltip, stars)
 
 COVER_SEARCH_TIP = "Cover-image search is disabled: the image model is not loaded (UC-04 E5). Arrives in Phase 3."
@@ -220,20 +220,35 @@ class BookDetailScreen(Screen):
         rating = (f"{stars(book['weighted_avg'])}  {book['weighted_avg']:.2f} weighted average "
                   f"({book['rating_count']} ratings)" if book["rating_count"] else "No ratings yet")
         ttk.Label(info, text=rating, foreground="#b7791f").pack(anchor="w", pady=(4, 0))
-        ttk.Label(info, text=f"${book['display_price']:.2f}", font=(FONT, 20, "bold")).pack(anchor="w", pady=4)
+        price_row = ttk.Frame(info)
+        price_row.pack(anchor="w", pady=4)
+        ttk.Label(price_row, text=f"${book['display_price']:.2f}", font=(FONT, 20, "bold")).pack(side="left")
+        if book["vip_discount"] > 0:                       # UC-09: VIP price, list price struck through
+            ttk.Label(price_row, text=f"${book['price']:.2f}", style="Muted.TLabel",
+                      font=(FONT, 13, "overstrike")).pack(side="left", padx=(8, 0))
+            ttk.Label(price_row, text="VIP -10%", foreground="#7a5200").pack(side="left", padx=(6, 0))
         ttk.Label(info, text=book["description"], wraplength=640, justify="left").pack(anchor="w")
         ttk.Label(info, text=f"Keywords: {book['keywords']}", style="Muted.TLabel").pack(anchor="w", pady=(4, 8))
 
         buttons = ttk.Frame(info)
         buttons.pack(anchor="w")
+        self.review_form = None
         if self.session.is_customer:
-            # Role-based buttons (UC-05 step 5). Their actions arrive in later phases.
-            for text, tip in (("Buy Now", "Purchasing (UC-08/09) arrives in Phase 2."),
-                              ("Write Review", "Reviews (UC-10/11) arrive in Phase 2."),
-                              ("Reading Companion", "The Smart Reading Companion (UC-14) arrives in Phase 3.")):
-                b = ttk.Button(buttons, text=text, state="disabled")
-                b.pack(side="left", padx=(0, 8))
-                Tooltip(b, tip)
+            # Role-based buttons (UC-05 step 5).
+            if book["owned"]:                              # UC-08 E3
+                ttk.Label(buttons, text="✔ You own this book", foreground=GREEN,
+                          font=(FONT, 13, "bold")).pack(side="left", padx=(0, 12))
+            else:
+                ttk.Button(buttons, text="Buy Now", style="Primary.TButton",
+                           command=lambda: self.on_buy(book)).pack(side="left", padx=(0, 8))
+            if book["my_review"]:                          # one review per book (A-09)
+                ttk.Label(buttons, text="✔ You reviewed this book", foreground=GREEN).pack(side="left", padx=(0, 12))
+            else:
+                ttk.Button(buttons, text="Write Review", command=self.toggle_review_form).pack(side="left", padx=(0, 8))
+            comp = ttk.Button(buttons, text="Reading Companion", state="disabled")
+            comp.pack(side="left", padx=(0, 8))
+            Tooltip(comp, "The Smart Reading Companion (UC-14) arrives in Phase 3.")
+            self.review_form = self.build_review_form(info, book)
         elif self.session.role == rules.VISITOR:
             ttk.Label(buttons, text="Sign in to buy, review or read this book.", style="Muted.TLabel").pack()
 
@@ -253,6 +268,97 @@ class BookDetailScreen(Screen):
             tk.Label(card, text=head, bg=CARD, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
             tk.Label(card, text=r["display_text"], bg=CARD, anchor="w", justify="left",
                      wraplength=820).pack(fill="x")
+
+    # ---- Buy Now (UC-08, UC-09)
+    def on_buy(self, book):
+        self.banner.clear()
+        try:
+            q = self.ctx.purchases.quote(self.session, book["book_id"])   # fresh price (UC-09 E1)
+        except (PermissionError, PurchaseError) as e:                     # E4 / book gone
+            self.banner.show(str(e), "error")
+            return
+        p = q.price
+        lines = [f"Buy \"{book['title']}\"?", "", f"List price:     ${p.list:.2f}"]
+        if p.discount > 0:
+            lines.append(f"VIP discount:  -${p.discount:.2f} (10%)")
+        lines += [f"You pay:        ${p.paid:.2f}", f"Your balance:  ${q.balance:.2f}"]
+        if q.insufficient:                     # decision A-20: warn before the R7 fine is charged
+            lines += ["", f"⚠ Your balance is too low. If you confirm, the purchase is rejected and a "
+                          f"${rules.FINE_AMOUNT:.2f} fine is charged (R7)."]
+            if q.fine_would_suspend:
+                lines.append("The fine would take your balance below $0.00, so your account would be SUSPENDED.")
+        if not self.app.confirm("Confirm purchase", "\n".join(lines)):
+            return                                                         # E5: nothing changes
+        try:
+            r = self.ctx.purchases.purchase(self.session, book["book_id"])
+        except PurchaseError as e:                                         # E1 / E2 / E3
+            self.app.set_flash(str(e), "error")
+            self.app.refresh_chrome()          # E2: suspended -> wallet-only sidebar
+            self.app.show("book", book_id=book["book_id"])  # redirected to the wallet if suspended
+            return
+        except PermissionError as e:
+            self.banner.show(str(e), "error")
+            return
+        receipt = [f"Receipt - {r.title}", "", f"List price:     ${r.list_price:.2f}"]
+        if r.discount > 0:
+            receipt.append(f"VIP discount:  -${r.discount:.2f} (VIP -10%)")
+        receipt += [f"Amount paid:   ${r.paid:.2f}", f"New balance:    ${r.balance:.2f}"]
+        if r.promoted:                         # R5; the discount starts next time (R6, UC-09 E2)
+            receipt += ["", "👑 You are now a VIP Customer! Your 10% discount starts with your next purchase."]
+        self.app.inform("Purchase complete", "\n".join(receipt))
+        self.app.set_flash(f"You bought \"{r.title}\" for ${r.paid:.2f}."
+                           + (" You are now a VIP Customer!" if r.promoted else ""), "ok")
+        self.app.refresh_chrome()
+        self.app.show("book", book_id=book["book_id"])
+
+    # ---- Write Review (UC-10, UC-11)
+    def build_review_form(self, parent, book):
+        form = ttk.Frame(parent, style="Card.TFrame", padding=12)
+        ttk.Label(form, text="Your review", style="Card.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
+        row = ttk.Frame(form, style="Card.TFrame")
+        row.pack(anchor="w", pady=4)
+        self.stars_var = tk.IntVar(value=0)
+        for n in range(1, 6):
+            ttk.Radiobutton(row, text="★" * n, value=n, variable=self.stars_var).pack(side="left", padx=(0, 10))
+        self.review_text = tk.Text(form, width=70, height=4, font=(FONT, 12), wrap="word")
+        self.review_text.pack(anchor="w")
+        bottom = ttk.Frame(form, style="Card.TFrame")
+        bottom.pack(fill="x", pady=(6, 0))
+        self.char_count = ttk.Label(bottom, text=f"0 / {rules.REVIEW_MAX_CHARS}", style="Card.TLabel", foreground=MUTED)
+        self.char_count.pack(side="left")
+        self.review_text.bind("<KeyRelease>", lambda _e: self.char_count.configure(
+            text=f"{len(self.review_text.get('1.0', 'end-1c').strip())} / {rules.REVIEW_MAX_CHARS}"))
+        ttk.Button(bottom, text="Submit Review", style="Primary.TButton",
+                   command=lambda: self.on_review(book)).pack(side="right")
+        ttk.Label(form, text="Reviews are checked for taboo words: 1-3 are masked with ****, more than 3 "
+                             "block the review and give you a warning (R9, R10).", style="Card.TLabel",
+                  foreground=MUTED, wraplength=600).pack(anchor="w", pady=(6, 0))
+        return form
+
+    def toggle_review_form(self):
+        if self.review_form.winfo_ismapped():
+            self.review_form.pack_forget()
+        else:
+            self.review_form.pack(anchor="w", pady=(10, 0), fill="x")
+            self.review_text.focus_set()
+
+    def on_review(self, book):
+        self.banner.clear()
+        try:
+            res = self.ctx.reviews.submit(self.session, book["book_id"], self.stars_var.get(),
+                                          self.review_text.get("1.0", "end-1c"))
+        except ValueError as e:                                            # E1: nothing stored
+            self.banner.show(str(e), "error")
+            return
+        except PermissionError as e:                                       # E3
+            self.banner.show(str(e), "error")
+            return
+        if res.status == rules.PUBLISHED:
+            self.app.set_flash(res.message, "ok")
+        else:                                                              # E2 -> UC-11
+            self.app.set_flash(res.message, "error" if res.consequence else "warn")
+        self.app.refresh_chrome()              # role/status may have changed (demoted / suspended)
+        self.app.show("book", book_id=book["book_id"])
 
 
 # ---------------------------------------------------------------- Sign in (UC-02)
@@ -413,12 +519,13 @@ class RegisterScreen(Screen):
             self.app.show("login", username=user["username"])
 
 
-# ---------------------------------------------------------------- My Balance (UC-07 read side)
+# ---------------------------------------------------------------- My Balance (UC-07)
 class WalletScreen(Screen):
     def build(self):
         if not self.session.is_customer:
             ttk.Label(self, text="My Balance is for customers.", style="H2.TLabel").pack(anchor="w")
             return
+        self.session.refresh()
         u = self.session.user
         ttk.Label(self, text="My Balance", style="H1.TLabel").pack(anchor="w", pady=(0, 10))
         top = ttk.Frame(self)
@@ -437,13 +544,21 @@ class WalletScreen(Screen):
         ttk.Label(dep, text="Add funds", style="Card.TLabel", font=(FONT, 13, "bold")).pack(anchor="w")
         row = ttk.Frame(dep, style="Card.TFrame")
         row.pack(anchor="w", pady=4)
-        ttk.Entry(row, width=12, state="disabled").pack(side="left")
-        btn = ttk.Button(row, text="Add Funds", state="disabled")
-        btn.pack(side="left", padx=6)
-        Tooltip(btn, "Deposits (UC-07) arrive in Phase 2.")
-        ttk.Label(dep, text="Suspended accounts: deposit until the balance is >= $0, then a Super-User "
-                            "can reactivate the account (R8).", style="Card.TLabel", foreground=MUTED,
+        ttk.Label(row, text="$", style="Card.TLabel", font=(FONT, 13)).pack(side="left")
+        self.amount = tk.Entry(row, width=12, font=(FONT, 13), highlightthickness=2,
+                               highlightbackground="#cfd5e1", highlightcolor=NAVY)
+        self.amount.pack(side="left", ipady=2)
+        self.amount.bind("<Return>", lambda _e: self.on_deposit())
+        ttk.Button(row, text="Add Funds", style="Primary.TButton", command=self.on_deposit).pack(side="left", padx=6)
+        ttk.Label(dep, text=f"Fake money only - no payment gateway. Up to ${rules.MAX_DEPOSIT:,.0f} per deposit, "
+                            "at most 2 decimals.", style="Card.TLabel", foreground=MUTED,
                   wraplength=420).pack(anchor="w")
+        if u["status"] == rules.SUSPENDED:
+            ok, why = self.ctx.status.can_reopen(u)        # R8
+            text = ("Your balance is $0.00 or more: a Super-User can now reactivate your account (R8)."
+                    if ok else f"Suspended: {why}; then a Super-User can reactivate your account (R8).")
+            ttk.Label(dep, text=text, style="Card.TLabel", foreground=GREEN if ok else RED,
+                      wraplength=420).pack(anchor="w", pady=(4, 0))
 
         ttk.Label(self, text="Ledger", style="H2.TLabel").pack(anchor="w", pady=(16, 4))
         tree = ttk.Treeview(self, columns=("date", "type", "desc", "amount", "balance"), show="headings", height=12)
@@ -455,6 +570,91 @@ class WalletScreen(Screen):
             tree.insert("", "end", values=(t["timestamp"], t["type"], t["note"],
                                            f"{t['amount']:+,.2f}", f"{t['balance_after']:,.2f}"))
         tree.pack(fill="x")
+
+    def on_deposit(self):
+        self.banner.clear()
+        try:
+            res = self.ctx.wallet.deposit(self.session, self.amount.get())
+        except ValueError:                                     # E1
+            self.amount.configure(highlightbackground=RED)
+            self.banner.show("Enter a valid amount (more than $0, at most 2 decimals, "
+                             f"at most ${rules.MAX_DEPOSIT:,.0f}).", "error")
+            return
+        except (PermissionError, OSError) as e:                # E2: write error, nothing changed
+            self.banner.show(f"Deposit failed: {e}", "error")
+            return
+        self.app.set_flash(f"Funds added. New balance: ${res.balance:,.2f}. {res.note}".strip(), "ok")
+        self.app.show("wallet")
+
+
+# ---------------------------------------------------------------- My Orders (A-14)
+class OrdersScreen(Screen):
+    def build(self):
+        ttk.Label(self, text="My Orders", style="H1.TLabel").pack(anchor="w", pady=(0, 10))
+        orders = self.ctx.purchases.list_orders(self.session.user["user_id"])
+        if not orders:
+            ttk.Label(self, text="No orders yet - use Buy Now on a book's page.", style="Muted.TLabel").pack(anchor="w")
+            return
+        ttk.Label(self, text="Double-click a row to open the book.", style="Muted.TLabel").pack(anchor="w")
+        tree = ttk.Treeview(self, columns=("date", "title", "list", "disc", "paid"), show="headings", height=16)
+        for col, label, w in (("date", "Date", 170), ("title", "Book", 360), ("list", "List price", 110),
+                              ("disc", "VIP discount", 120), ("paid", "Paid", 110)):
+            tree.heading(col, text=label)
+            tree.column(col, width=w, anchor="w")
+        for p in orders:
+            tree.insert("", "end", iid=p["purchase_id"], values=(
+                p["timestamp"], p["title"], f"${p['list_price']:.2f}",
+                f"-${p['discount']:.2f}" if p["discount"] else "-", f"${p['price_paid']:.2f}"))
+        book_of = {p["purchase_id"]: p["book_id"] for p in orders}
+        tree.bind("<Double-1>", lambda _e: tree.focus() and self.open_book(book_of[tree.focus()]))
+        tree.pack(fill="x", pady=6)
+        total = sum(p["price_paid"] for p in orders)
+        ttk.Label(self, text=f"{len(orders)} book(s), ${total:,.2f} in total.", style="Muted.TLabel").pack(anchor="w")
+
+
+# ---------------------------------------------------------------- My Reviews + warnings (A-14, UC-11 step 3)
+class MyReviewsScreen(Screen):
+    def build(self):
+        self.session.refresh()
+        u = self.session.user
+        ttk.Label(self, text="My Reviews", style="H1.TLabel").pack(anchor="w", pady=(0, 10))
+        reviews = self.ctx.reviews.list_user_reviews(u["user_id"])
+        if not reviews:
+            ttk.Label(self, text="You have not written any reviews yet.", style="Muted.TLabel").pack(anchor="w")
+        else:
+            tree = ttk.Treeview(self, columns=("date", "title", "stars", "status", "text"), show="headings", height=9)
+            for col, label, w in (("date", "Date", 160), ("title", "Book", 240), ("stars", "Rating", 90),
+                                  ("status", "Status", 110), ("text", "Shown as", 380)):
+                tree.heading(col, text=label)
+                tree.column(col, width=w, anchor="w")
+            for r in reviews:
+                shown = r["display_text"] if r["status"] == rules.PUBLISHED else "(blocked - never shown)"
+                tree.insert("", "end", iid=r["review_id"], values=(
+                    r["timestamp"], r["title"], stars(r["rating"]), r["status"], shown))
+            book_of = {r["review_id"]: r["book_id"] for r in reviews}
+            tree.bind("<Double-1>", lambda _e: tree.focus() and self.open_book(book_of[tree.focus()]))
+            tree.pack(fill="x")
+
+        ttk.Label(self, text=f"Warnings ({u['warnings']})", style="H2.TLabel").pack(anchor="w", pady=(16, 2))
+        if u["role"] == rules.RC:
+            left = rules.RC_SUSPEND_ABOVE + 1 - u["warnings"]
+            note = (f"{left} more warning(s) and your account will be suspended (R10)." if left > 0 else "")
+        else:
+            note = "VIP Customers lose VIP status after one blocked review (R10)."
+        if note:
+            ttk.Label(self, text=note, style="Muted.TLabel").pack(anchor="w")
+        warnings = self.ctx.warnings.get_warnings(u["user_id"])
+        if not warnings:
+            ttk.Label(self, text="No warnings.", style="Muted.TLabel").pack(anchor="w")
+            return
+        titles = {r["review_id"]: r["title"] for r in reviews}
+        wt = ttk.Treeview(self, columns=("date", "reason", "book"), show="headings", height=5)
+        for col, label, w in (("date", "Date", 170), ("reason", "Reason", 200), ("book", "Review of", 360)):
+            wt.heading(col, text=label)
+            wt.column(col, width=w, anchor="w")
+        for w in warnings:
+            wt.insert("", "end", values=(w["timestamp"], w["reason"], titles.get(w["review_id"], "")))
+        wt.pack(fill="x", pady=4)
 
 
 # ---------------------------------------------------------------- not built yet

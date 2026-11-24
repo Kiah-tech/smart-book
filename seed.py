@@ -5,10 +5,15 @@ so nothing is downloaded. Run:  .venv/bin/python seed.py
 
 Demo accounts (sign in by choosing the matching file in data/samples/):
   sue_admin  Super-User
-  alice      Registered Customer, $50 balance
-  victor     VIP Customer, $120 balance (seeded as VIP for the demo)
-  sid        Registered Customer, SUSPENDED (balance -$1.00 after a fine) -> wallet-only
-  bella, carlos, dana, eli, fay   Registered Customers who wrote the seeded reviews
+  alice      Registered Customer, $50 balance, 3 purchases: her next purchase makes her VIP (R5)
+  victor     VIP Customer, $120 balance, promoted by his 4th purchase (R5)
+  sid        Registered Customer, SUSPENDED: tried to buy with $0, fined $1.00 (R7) -> wallet-only
+  wes        Registered Customer with 2 warnings: one more blocked review suspends him (R10)
+  bella, carlos, dana, eli, fay   Registered Customers who wrote the seeded reviews (1 purchase each)
+
+Purchases, the promotion, the fine/suspension, the warnings and the reviews all go
+through the real services (PurchaseService, ReviewService, ...), so every counter,
+ledger entry and status change is consistent. clock.frozen() gives them fixed timestamps.
 """
 import hashlib
 import random
@@ -19,11 +24,13 @@ from pathlib import Path
 
 import numpy as np
 
-from bookorbit import rules
+from bookorbit import clock, rules
 from bookorbit.ai import media
 from bookorbit.ai.biometrics import FACE, VOICE
 from bookorbit.app_context import build_context
 from bookorbit.config import PROJECT_ROOT, load_config
+from bookorbit.errors import PurchaseError
+from bookorbit.services.session import Session
 
 RNG = random.Random(322)          # fixed seed: every reset gives the same data
 BASE_TIME = datetime(2026, 10, 1, 9, 0, 0)
@@ -91,17 +98,30 @@ REVIEW_TEXT = {
     1: ["Not for me at all.", "Very disappointing.", "Could not get into it."],
 }
 DEMO_USERS = [
-    # username, full name, role, status, starting deposit, voice pitch (Hz) for the MOCK voiceprint
-    ("sue_admin", "Sue Admin", rules.SU, rules.ACTIVE, 0.0, 180),
-    ("alice", "Alice Morgan", rules.RC, rules.ACTIVE, 50.0, 220),
-    ("victor", "Victor Hale", rules.VC, rules.ACTIVE, 120.0, 130),
-    ("sid", "Sid Turner", rules.RC, rules.SUSPENDED, 0.0, 150),
-    ("bella", "Bella Cruz", rules.RC, rules.ACTIVE, 20.0, 240),
-    ("carlos", "Carlos Ibanez", rules.RC, rules.ACTIVE, 20.0, 110),
-    ("dana", "Dana Okafor", rules.RC, rules.ACTIVE, 20.0, 200),
-    ("eli", "Eli Novak", rules.RC, rules.ACTIVE, 20.0, 120),
-    ("fay", "Fay Lindqvist", rules.RC, rules.ACTIVE, 20.0, 260),
+    # username, full name, role, voice pitch (Hz) for the MOCK voiceprint (unique per 10 Hz).
+    # Everyone starts as an ACTIVE RC; VIP and SUSPENDED states are earned through the services.
+    ("sue_admin", "Sue Admin", rules.SU, 180),
+    ("alice", "Alice Morgan", rules.RC, 220),
+    ("victor", "Victor Hale", rules.RC, 130),
+    ("sid", "Sid Turner", rules.RC, 150),
+    ("wes", "Wes Barlow", rules.RC, 170),
+    ("bella", "Bella Cruz", rules.RC, 240),
+    ("carlos", "Carlos Ibanez", rules.RC, 110),
+    ("dana", "Dana Okafor", rules.RC, 200),
+    ("eli", "Eli Novak", rules.RC, 120),
+    ("fay", "Fay Lindqvist", rules.RC, 260),
 ]
+# Balances each customer ends the seed with (alice and victor deposit extra to pay for
+# their purchases first, so they end exactly here).
+END_BALANCE = {"alice": 50.0, "victor": 120.0, "wes": 20.0}
+START_DEPOSIT = {"bella": 20.0, "carlos": 20.0, "dana": 20.0, "eli": 20.0, "fay": 20.0}
+
+# Decision A-22: mild placeholder taboo words (no real profanity - this is a class demo).
+# The SRS prototype (Section 5.2) uses "dumb" as its example. Super-Users edit the list in UC-16.
+TABOO_WORDS = ["crap", "darn", "dumb", "garbage", "heck", "idiot", "lame", "moron", "stupid", "trash"]
+# wes's two blocked reviews (4 taboo words each -> BLOCKED, one warning each; R9, R10)
+BLOCKED_TEXTS = ["What a dumb, stupid plot. Lame characters and a darn silly ending.",
+                 "Total garbage. Trash pacing, an idiot hero and a crap twist."]
 
 
 def ts(offset_minutes: int) -> str:
@@ -171,7 +191,7 @@ def main() -> None:
 
     # --- users (+ biometric templates enrolled through the same engine as UC-01) ---
     users, minute = {}, 0
-    for username, name, role, status, deposit, pitch in DEMO_USERS:
+    for username, name, role, pitch in DEMO_USERS:
         uid = fs.next_id("users", "U")
         enroll_face = make_face_photo(username, 1, 0)
         enroll_voice = make_voice(pitch, 3.0, 0)
@@ -186,28 +206,6 @@ def main() -> None:
         fs.append("users", user)
         users[username] = user
         minute += 5
-        if deposit:
-            fs.append("transactions", {"txn_id": fs.next_id("transactions", "X"), "user_id": uid,
-                                       "type": "DEPOSIT", "amount": deposit, "balance_after": deposit,
-                                       "book_id": None, "note": "Add funds", "timestamp": ts(minute)})
-            fs.update("users", "user_id", uid, {"balance": deposit})
-        if role == rules.VC:
-            # Seeded VIP for the demo; real promotions (R5) are earned through purchases in Phase 2.
-            fs.append("status_changes", {"change_id": fs.next_id("status_changes", "SC"), "user_id": uid,
-                                         "from_role": rules.RC, "to_role": rules.VC, "from_status": rules.ACTIVE,
-                                         "to_status": rules.ACTIVE, "reason": "seed: demo VIP",
-                                         "timestamp": ts(minute)})
-        if status == rules.SUSPENDED:
-            # R7: a purchase attempt with $0 -> $1.00 fine -> negative balance -> SUSPENDED
-            fs.append("transactions", {"txn_id": fs.next_id("transactions", "X"), "user_id": uid,
-                                       "type": "FINE", "amount": -rules.FINE_AMOUNT,
-                                       "balance_after": -rules.FINE_AMOUNT, "book_id": "B-0001",
-                                       "note": "Insufficient funds", "timestamp": ts(minute)})
-            fs.append("status_changes", {"change_id": fs.next_id("status_changes", "SC"), "user_id": uid,
-                                         "from_role": rules.RC, "to_role": rules.RC, "from_status": rules.ACTIVE,
-                                         "to_status": rules.SUSPENDED, "reason": "negative balance",
-                                         "timestamp": ts(minute)})
-            fs.update("users", "user_id", uid, {"balance": -rules.FINE_AMOUNT, "status": rules.SUSPENDED})
 
     # extra demo samples for the exceptional scenarios of UC-01 / UC-02
     (samples / "stranger_face.png").write_bytes(make_face_photo("stranger", 1, 0))
@@ -243,30 +241,74 @@ def main() -> None:
                 "indexed": False, "added_at": ts(minute)})
             minute += 1
 
-    # --- reviews: one per customer per book (ASSUMPTIONS A-09); clean text only ---
-    reviewers = [users[u]["user_id"] for u in ("alice", "victor", "bella", "carlos", "dana", "eli", "fay")]
-    book_ids = [b["book_id"] for b in fs.load("books")]
+    for word in TABOO_WORDS:
+        fs.append("taboo_words", {"word": word, "added_by": su_id, "added_at": ts(minute)})
+
+    # --- review plan: one per customer per book (ASSUMPTIONS A-09); clean text only ---
+    reviewer_names = ["alice", "victor", "bella", "carlos", "dana", "eli", "fay"]
+    books = {b["book_id"]: b for b in fs.load("books")}
+    book_ids = list(books)
     loved, disliked = book_ids[0:50:9][:4], book_ids[3:50:11][:2]   # demo R13 lists
-    review_minute = 60 * 24 * 30
+    plan = []                                                       # (book_id, username, rating)
     for bid in book_ids:
         if bid in loved:
-            who, ratings = reviewers[:5], [5, 5, 4, 5, 5]
+            who, ratings = reviewer_names[:5], [5, 5, 4, 5, 5]
         elif bid in disliked:
-            who, ratings = reviewers[2:7], [1, 2, 1, 1, 2]
+            who, ratings = reviewer_names[2:7], [1, 2, 1, 1, 2]
         else:
-            who = RNG.sample(reviewers, RNG.randint(0, 3))
+            who = RNG.sample(reviewer_names, RNG.randint(0, 3))
             ratings = [RNG.choice([2, 3, 3, 4, 4, 4, 5, 5]) for _ in who]
-        for uid, rating in zip(who, ratings):
-            text = RNG.choice(REVIEW_TEXT[rating])
-            fs.append("reviews", {
-                "review_id": fs.next_id("reviews", "R"), "book_id": bid, "user_id": uid,
-                "rating": rating, "original_text": text, "display_text": text, "taboo_count": 0,
-                "status": "PUBLISHED", "verified_buyer": False, "weight": rules.W_OTHER,
-                "timestamp": ts(review_minute)})
-            review_minute += RNG.randint(30, 600)
+        plan += [(bid, name, rating) for name, rating in zip(who, ratings)]
+    planned = {name: [bid for bid, n, _ in plan if n == name] for name in reviewer_names}
+
+    # --- money: deposits and Buy Now through the real services (UC-07, UC-08, R5, R7) ---
+    sessions = {name: Session(fs) for name in users}
+    for name, sess in sessions.items():
+        sess.start(fs.find("users", "username", name))
+    to_buy = {
+        "victor": loved,                                 # 4th purchase -> VIP (R5)
+        "alice": planned["alice"][:3],                   # 3 purchases: the next one promotes her
+        # one affordable book each, so their reviews of it count as verified (weight 2.0, R12)
+        **{n: [b for b in planned[n] if books[b]["price"] <= 14.99][:1] for n in START_DEPOSIT},
+    }
+    t = 60 * 24                                          # purchases start one day after the books
+    for name in ["alice", "victor", "wes", *START_DEPOSIT]:
+        cost = sum(books[b]["price"] for b in to_buy.get(name, []))
+        amount = START_DEPOSIT.get(name, END_BALANCE.get(name, 0.0) + cost)
+        with clock.frozen(ts(t)):
+            ctx.wallet.deposit(sessions[name], f"{amount:.2f}")
+        for bid in to_buy.get(name, []):
+            t += 37
+            with clock.frozen(ts(t)):
+                ctx.purchases.purchase(sessions[name], bid)
+        t += 60
+    with clock.frozen(ts(t)):                            # R7: sid tries to buy with $0.00
+        try:
+            ctx.purchases.purchase(sessions["sid"], book_ids[0])
+        except PurchaseError:
+            pass                                         # fined $1.00 -> balance -$1.00 -> SUSPENDED
+
+    # --- reviews through ReviewService (moderation, verified weight, ratings, R13 lists) ---
+    review_minute = 60 * 24 * 30
+    for bid, name, rating in plan:
+        with clock.frozen(ts(review_minute)):
+            ctx.reviews.submit(sessions[name], bid, rating, RNG.choice(REVIEW_TEXT[rating]))
+        review_minute += RNG.randint(30, 600)
+    # wes: two blocked reviews -> 2 warnings (R9, R10); a 3rd would suspend him
+    for bid, text in zip(book_ids[5:7], BLOCKED_TEXTS):
+        review_minute += 90
+        with clock.frozen(ts(review_minute)):
+            ctx.reviews.submit(sessions["wes"], bid, 1, text)
     ctx.ratings.recalculate_all()
 
+    u = {n: fs.find("users", "username", n) for n in users}
+    assert u["victor"]["role"] == rules.VC and u["alice"]["role"] == rules.RC
+    assert u["sid"]["status"] == rules.SUSPENDED and u["wes"]["warnings"] == 2
+    lists = [b["list_status"] for b in fs.load("books")]
+    assert lists.count(rules.LIST_TO_ORDER) == 4 and lists.count(rules.LIST_NO_ORDER) == 2, lists
+
     print(f"Seeded {len(fs.load('users'))} users, {len(fs.load('books'))} books, "
+          f"{len(fs.load('purchases'))} purchases, {len(TABOO_WORDS)} taboo words, "
           f"{len(fs.load('reviews'))} reviews into {data_dir}")
     print(f"Demo sign-in samples: {samples}")
 

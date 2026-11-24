@@ -3,6 +3,8 @@
 Source of truth: `docs/BookOrbit_AI_Phase2_Design_Report.pdf` (v2.0), use cases
 UC-01..UC-18 and business rules R1..R15 (Table 2). The Phase I SRS that the report
 cites (`Phase1_Specification.pdf`) is not in `docs/`, so the Phase II report is used alone.
+`docs/SRS.md` is a plain-text extract of the PDF (headings, UC/R IDs and pseudo-code kept;
+diagrams left out) so it can be searched without PDF tools.
 
 Status legend: **RESOLVED** (decided with the project owner), **ASSUMPTION** (our reading
 of something the SRS leaves open), **DEVIATION** (we knowingly differ from the SRS
@@ -24,15 +26,22 @@ pseudo-code), **FLAG** (kept as written but worth noting), **MOCK / STUB** (not 
 | ID | Gap | Status | Decision |
 |----|-----|--------|----------|
 | A-08 | UC-01 only creates Registered Customers; how is a Super-User created? | **RESOLVED** | `seed.py` creates the Super-User account (`sue_admin`). |
-| A-09 | May a customer review the same book more than once? | **RESOLVED** | One review per customer per book (enforced in Phase 2, UC-10). Seeded reviews follow this. |
+| A-09 | May a customer review the same book more than once? | **RESOLVED** | One review per customer per book (enforced in `ReviewService.submit`, UC-10). Seeded reviews follow this. See A-21 for blocked reviews. |
 | A-10 | R15: summarize / explain / ask on non-owned books do not check the chapter | **RESOLVED** | R15's chapter-1 limit applies to *every* Reading Companion action (Phase 3). |
 | A-11 | Book texts and covers | **RESOLVED** | Generated locally by `seed.py` (abstract PNG covers now; short original chapter texts in Phase 3). Nothing is downloaded. All 50 books are made up. |
 | A-12 | `keywords` is typed `str` but the recommender loops over it | ASSUMPTION | Stored as a comma-separated string ("family, secrets"), split on commas where a list is needed. Keyword search matches keywords + description (SRS 4.8). |
 | A-13 | UC-13 E3 "lists example admin questions" has no pseudo-code | ASSUMPTION | Will show a fixed list of example questions (Phase 3). |
-| A-14 | "My Orders" and "My Reviews" sidebar items have no use case | ASSUMPTION | My Orders = the customer's purchases; My Reviews = their reviews and warnings (UC-11 step 3). Phase 2. |
+| A-14 | "My Orders" and "My Reviews" sidebar items have no use case | ASSUMPTION | My Orders = the customer's purchases; My Reviews = their reviews (blocked ones shown only as "blocked - never shown") and their warnings (UC-11 step 3). Done in Phase 2. |
 | A-15 | `browse_count` (R3) counts every view | ASSUMPTION | Counts views by everyone (Visitors and SUs included), as UC-05 step 3 says; only RC/VC views create a BROWSE_EVENT. |
 | A-16 | UC-04 cover search returns the top 5; text search ordering when a sort is chosen | ASSUMPTION | Text search keeps best-match order (exact, prefix, contains) unless the user picks a sort other than title. |
 | A-17 | Year search input format | ASSUMPTION | A single year (`1995`) or a range (`1990-2000`). |
+| A-19 | "Rounded to the cent" (R6, SRS 3.1) does not say how | ASSUMPTION | Half a cent rounds **up** (`bookorbit/money.py`, `Decimal` + `ROUND_HALF_UP`). Python's `round()` rounds exact halves to even and works on binary floats, so `round(0.125, 2)` is 0.12 and `round(2.675, 2)` is 2.67. Example: VIP discount on $12.45 = $1.245 -> **$1.25**, pays $11.20. Every amount written to a file goes through `cents()`. |
+| A-20 | UC-08 step 2: what the confirmation dialog shows when the balance is too low | **RESOLVED** | The dialog shows list price, VIP discount, amount to pay **and the current balance**. If the balance is too low it warns that confirming will be rejected with a $1.00 fine (R7), and, if the fine would take the balance below $0, that the account would be suspended. R7 itself is unchanged: confirming still charges the fine (F-18). Helper: `PurchaseService.quote` (not in the SRS; it only reads). |
+| A-21 | Does a **blocked** review use up the customer's one review of that book (A-09)? | **RESOLVED** | No. Only a PUBLISHED review counts, so after a block the customer may write a new review; the warning is the penalty. |
+| A-22 | The SRS gives no taboo word list | **RESOLVED** | `seed.py` seeds 10 mild placeholder words (no real profanity, it is a class demo): crap, darn, dumb, garbage, heck, idiot, lame, moron, stupid, trash. "dumb" is the SRS prototype's own example. Super-Users will edit the list in UC-16 (Phase 4). |
+| A-23 | Demo data for R10 | **RESOLVED** | `seed.py` adds `wes`, an RC whose two blocked reviews gave him 2 warnings, so a single blocked review shows a suspension live. `victor` covers VIP demotion. |
+| A-25 | Verified-buyer weight (R12) when a customer reviews first and buys later | ASSUMPTION | The weight is fixed when the review is submitted, as in the pseudo-code (`ReviewService.submit`): a review written before buying stays at weight 1.0. Combined with one review per book (A-09), that customer cannot later get weight 2.0 for that book. |
+| A-26 | R5 "more than 3 purchases" / "more than $200" | ASSUMPTION | Read literally: the **4th** purchase promotes (3 is not enough), and spending must exceed $200.00 (exactly $200.00 is not enough). Book prices are $4.99-$34.99, so the purchase-count path almost always triggers first. Counters restart at 0 after a demotion (R10), not after a reopen (R8 only resets warnings). The discount starts with the purchase *after* the promotion (R6, UC-09 E2). |
 
 ## Deviations from the SRS pseudo-code
 
@@ -46,7 +55,8 @@ pseudo-code), **FLAG** (kept as written but worth noting), **MOCK / STUB** (not 
 
 | ID | Rule | Note |
 |----|------|------|
-| F-18 | R7 | Kept exactly as written: a customer with $0.00 who clicks Buy is fined $1.00, the balance becomes -$1.00 and the account is **suspended at once**. Strict, but it is what the SRS says. The seeded user `sid` is in that state. |
+| F-18 | R7 | Kept exactly as written: a customer with $0.00 who clicks Buy is fined $1.00, the balance becomes -$1.00 and the account is **suspended at once**. Strict, but it is what the SRS says. The seeded user `sid` is in that state (created by a real purchase attempt). The Buy Now dialog now warns before this happens (A-20). |
+| F-24 | R10 order of checks (SRS 4.16 `apply_consequences`) | **QUESTION FOR THE GROUP.** The pseudo-code checks "is VC -> demote" *before* "RC with > 2 warnings -> suspend" and returns after the demotion. So a VIP who already has 2 warnings and gets a 3rd blocked review is **only demoted** (now an RC with 3 warnings, still ACTIVE); the *next* blocked review suspends them. R10 can also be read as "the 3rd warning always suspends". We kept the pseudo-code order; test: `test_vip_with_two_warnings_only_demoted`. If the group decides otherwise, the fix is to check the suspension first in `WarningService.apply_consequences`. |
 
 ## Mocks and stubs (also shown in the UI)
 
@@ -55,6 +65,7 @@ pseudo-code), **FLAG** (kept as written but worth noting), **MOCK / STUB** (not 
 | M-01 | Biometric sign-in (UC-01, UC-02, R1, R2) | **MOCK** (`BIOMETRIC_MODE=mock`) | No webcam / microphone / PyTorch. The user picks a sample *file* (PNG/JPG photo or WAV clip). The mock turns it into a unit vector: a fixed random "person" vector plus a small per-file offset. Two different samples of the same person score about 0.92 cosine and different people about 0.0, so the real R2 thresholds (0.60 face / 0.75 voice), the lockout and E3/E5/E6 all behave as specified. The person comes from a PNG text tag written by `seed.py` (any other photo is identified by its file hash); for voice it is the clip's dominant pitch. Templates are stored as `.npy` files exactly as in the SRS. Real models: Phase 3 (optional). The sidebar shows "MOCK biometrics". |
 | M-02 | Personalized recommendations (UC-06, R4) | **STUB** until Phase 3 | Customers see popular books under "Popular right now", which is the SRS's own no-history fallback (UC-06 E1). |
 | M-03 | Cover-image search (UC-04 step 4) | **STUB** until Phase 3 | The camera button is disabled with a tooltip, exactly as UC-04 E5 ("image model not loaded"). |
-| M-04 | VIP price on the details page (UC-05 step 5) | **STUB** until Phase 2 | Everyone sees the list price until `PurchaseService.final_price` exists. |
-| M-05 | Screens for later phases | **STUB** | Sidebar items for later phases open a placeholder naming the phase and use case. Buy / Review / Companion buttons are disabled with tooltips. |
-| M-06 | Seed data | Seeded directly | `victor` is seeded as a VIP and `sid` as suspended (with matching ledger and status-change records) so those states can be demoed before Phase 2 can create them through purchases. Seeded reviews are clean text, unverified (weight 1.0). |
+| M-04 | VIP price on the details page (UC-05 step 5) | **DONE** (Phase 2) | Was a stub in Phase 1; now `CatalogService.get_details` uses `PurchaseService.final_price`. |
+| M-05 | Screens for later phases | **STUB** | Sidebar items for later phases open a placeholder naming the phase and use case. The Reading Companion button is disabled with a tooltip (Phase 3). |
+| M-06 | Seed data | **Real services** (since Phase 2) | Deposits, purchases, `victor`'s VIP promotion, `sid`'s fine and suspension, `wes`'s warnings and all seeded reviews go through the real services, so counters, ledgers, verified weights and status changes are consistent. `clock.frozen()` gives them fixed, repeatable timestamps. Only users, books, biometric templates and taboo words are written directly. Seeded reviews are clean text. |
+| M-07 | Reopening a suspended account (R8, UC-17) | **STUB** until Phase 4 | `StatusManager.can_reopen` / `reopen` exist and are tested, but the Super-User screen that calls them comes in Phase 4. Until then a suspended customer can deposit (and sees "a Super-User can now reactivate your account" once the balance is >= $0) but stays suspended. To reset the demo, run `seed.py`. |

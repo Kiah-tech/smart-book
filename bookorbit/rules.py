@@ -63,3 +63,10 @@ PAGE_SIZE = 12
 
 # UC-10 - review length
 REVIEW_MAX_CHARS = 1000
+
+# Transaction types (SRS 3.1 TRANSACTION.type) and review statuses (REVIEW.status)
+DEPOSIT, PURCHASE, FINE = "DEPOSIT", "PURCHASE", "FINE"
+PUBLISHED, BLOCKED = "PUBLISHED", "BLOCKED"
+
+# R10 consequences returned by WarningService.issue (SRS 4.16)
+DEMOTED = "DEMOTED"

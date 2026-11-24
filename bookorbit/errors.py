@@ -43,3 +43,17 @@ class ModelUnavailable(BookOrbitError):
 
 class NotFound(BookOrbitError):
     """UC-05 E1: book no longer exists."""
+
+
+class PurchaseError(BookOrbitError):
+    """UC-08 E1-E3. suspended=True when the R7 fine made the balance negative (E2),
+    so the screen switches to wallet-only mode."""
+
+    def __init__(self, message: str, suspended: bool = False, fined: bool = False):
+        self.suspended = suspended
+        self.fined = fined
+        super().__init__(message)
+
+
+class ReopenError(BookOrbitError):
+    """UC-17 E1 / R8: the account cannot be reopened (not suspended, or balance < $0)."""

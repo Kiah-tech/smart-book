@@ -1,6 +1,6 @@
 """MainWindow - navy role-based sidebar + content area (SRS 4.24, Section 5)."""
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from bookorbit import rules
 from bookorbit.services.session import Session
@@ -19,8 +19,7 @@ SIDEBAR = {
                     ("Sign In", "login", {}), ("Register", "register", {})],
     rules.RC: [("Home", "home", {}), ("Browse", "catalog", {}),
                ("Recommendations", "placeholder", {"title": "Recommendations", "phase": 3, "uc": "UC-06"}),
-               ("My Orders", "placeholder", {"title": "My Orders", "phase": 2, "uc": "UC-08"}),
-               ("My Reviews", "placeholder", {"title": "My Reviews", "phase": 2, "uc": "UC-10/11"}),
+               ("My Orders", "orders", {}), ("My Reviews", "my_reviews", {}),
                ("My Balance", "wallet", {}),
                ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12"}),
                ("Sign Out", "logout", {})],
@@ -38,6 +37,7 @@ WALLET_ONLY = [("My Balance", "wallet", {}), ("Sign Out", "logout", {})]   # R8
 SCREENS = {
     "home": screens.HomeScreen, "catalog": screens.CatalogScreen, "book": screens.BookDetailScreen,
     "login": screens.LoginScreen, "register": screens.RegisterScreen, "wallet": screens.WalletScreen,
+    "orders": screens.OrdersScreen, "my_reviews": screens.MyReviewsScreen,
     "placeholder": screens.PlaceholderScreen,
 }
 
@@ -49,6 +49,7 @@ class MainWindow(tk.Tk):
         self.session = Session(ctx.fs)          # starts as a Visitor
         self.flash = None                       # (text, kind) shown by the next screen
         self.current = None
+        self.active = "Home"                    # highlighted sidebar item
         self.title("BookOrbit AI")
         self.geometry("1200x800")
         self.minsize(1100, 720)
@@ -64,6 +65,7 @@ class MainWindow(tk.Tk):
 
     # ---------------------------------------------------------------- sidebar
     def build_sidebar(self, active: str = "Home") -> None:
+        self.active = active
         for w in self.sidebar.winfo_children():
             w.destroy()
         tk.Label(self.sidebar, text="BookOrbit AI", bg=NAVY, fg="white",
@@ -106,6 +108,19 @@ class MainWindow(tk.Tk):
 
     def set_flash(self, text: str, kind: str = "info") -> None:
         self.flash = (text, kind)
+
+    def refresh_chrome(self) -> None:
+        """Re-read the user and redraw the sidebar after a role/status change
+        (R5 promotion, R10 demotion, R7/R10 suspension -> wallet-only mode)."""
+        self.session.refresh()
+        self.build_sidebar("My Balance" if self.session.wallet_only else self.active)
+
+    # Dialogs go through these two methods so the UI smoke test can answer them.
+    def confirm(self, title: str, message: str) -> bool:
+        return messagebox.askyesno(title, message, parent=self)
+
+    def inform(self, title: str, message: str) -> None:
+        messagebox.showinfo(title, message, parent=self)
 
     def on_login(self, session) -> None:
         self.session = session

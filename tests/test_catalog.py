@@ -57,11 +57,10 @@ class CatalogTests(TempStoreCase):
         self.ctx.catalog.get_details("B-0001", visitor)
         self.assertEqual(self.fs.find("books", "book_id", "B-0001")["browse_count"], 1)
         self.assertEqual(self.fs.load("browse_history"), [])
-        customer = Session(self.fs)
-        customer.start({"user_id": "U-0005", "role": rules.RC, "status": rules.ACTIVE})
-        self.ctx.catalog.get_details("B-0001", customer)
+        pat = self.add_user("pat")
+        self.ctx.catalog.get_details("B-0001", self.session_for(pat))
         self.assertEqual(self.fs.find("books", "book_id", "B-0001")["browse_count"], 2)
-        self.assertEqual(self.fs.load("browse_history")[0]["user_id"], "U-0005")
+        self.assertEqual(self.fs.load("browse_history")[0]["user_id"], pat["user_id"])
 
     def test_details_missing_book(self):                                # UC-05 E1
         with self.assertRaises(NotFound):

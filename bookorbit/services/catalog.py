@@ -27,9 +27,10 @@ def parse_year_range(q: str) -> tuple[int, int]:
 
 
 class CatalogService:
-    def __init__(self, fs, reviews, covers=None):
+    def __init__(self, fs, reviews, covers=None, purchases=None):
         self.fs = fs
         self.reviews = reviews
+        self.purchases = purchases    # PurchaseService: VIP price + "already owned" (UC-05 step 5)
         self.covers = covers          # CoverIndex arrives in Phase 3 (UC-04 E5)
 
     def categories(self) -> list[str]:
@@ -91,9 +92,16 @@ class CatalogService:
             raise NotFound("Book unavailable")                # E1
         book = self.record_browse(session, book_id)
         book["reviews"] = self.reviews.list_reviews(book_id)  # E2 handled by the screen
-        # UC-05 step 5 / UC-09: VC sees the VIP price. PurchaseService.final_price
-        # arrives in Phase 2; until then the list price is shown to everyone.
-        book["display_price"] = book["price"]
+        # UC-05 step 5 / UC-09: a VC sees the VIP price. final_price re-reads the role,
+        # so a VIP demoted a moment ago sees the full price at once (UC-11 E1).
+        book["display_price"], book["vip_discount"] = book["price"], 0.0
+        book["owned"], book["my_review"] = False, None
+        if session.is_customer and session.user and self.purchases:
+            price = self.purchases.final_price(session.user, book)
+            book["display_price"], book["vip_discount"] = price.paid, price.discount
+            uid = session.user["user_id"]
+            book["owned"] = self.purchases.already_owned(uid, book_id)          # UC-08 E3
+            book["my_review"] = self.reviews.user_review(uid, book_id)          # A-09
         return book
 
     def record_browse(self, session, book_id: str) -> dict:
