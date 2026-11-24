@@ -41,6 +41,11 @@ class ModelUnavailable(BookOrbitError):
     """A real AI model/service is not installed or not reachable."""
 
 
+class LLMUnavailable(ModelUnavailable):
+    """SRS 4.22: Ollama not running, model missing, or no reply within the timeout.
+    Screens show "The assistant is offline" (UC-12 E3, UC-14 E4)."""
+
+
 class NotFound(BookOrbitError):
     """UC-05 E1: book no longer exists."""
 

@@ -83,9 +83,13 @@ class MainWindow(tk.Tk):
                            anchor="w", padx=18, pady=8, cursor="hand2")
             btn.pack(fill="x")
             btn.bind("<Button-1>", lambda _e, l=label, sc=screen, kw=kwargs: self._nav(l, sc, kw))
+        # Which AI parts are real and which are mocked (CLAUDE.md: label every MOCK in the UI)
+        modes = [self.ctx.llm.mode_label]
         if self.ctx.bio.is_mock:
-            tk.Label(self.sidebar, text="MOCK biometrics\n(see docs/ASSUMPTIONS.md)", bg=NAVY,
-                     fg="#8f9bb8", font=(FONT, 10), justify="left", padx=18).pack(side="bottom", anchor="w", pady=12)
+            modes.append("MOCK biometrics")
+        tk.Label(self.sidebar, text="\n".join(modes) + "\n(see docs/ASSUMPTIONS.md)", bg=NAVY,
+                 fg="#8f9bb8", font=(FONT, 10), justify="left", padx=18, wraplength=180).pack(
+            side="bottom", anchor="w", pady=12)
 
     def _nav(self, label, screen, kwargs):
         if screen == "logout":
