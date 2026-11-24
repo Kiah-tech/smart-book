@@ -68,8 +68,15 @@ class MockLLMTests(unittest.TestCase):
             answer = q["options"][q["answer_index"]]
             self.assertIn(q["q"].replace("Fill in the blank: ", "").replace("_____", answer), CHAPTER)
 
-    def test_classify_falls_back_to_general(self):
+    def test_classify_uses_store_context(self):
         self.assertEqual(self.llm.generate("p", 3, task="classify", question="tell me a joke"), "GENERAL")
+        self.assertEqual(self.llm.generate("p", 3, task="classify", question="dragon books?",
+                                           context=["The Dragon Who Collected Maps by ..."]), "STORE")
+
+    def test_short_facts_can_be_the_answer(self):
+        out = self.llm.generate("p", task="answer", question="What is my balance?",
+                                context=["Role: RC", "Balance: $50.00", "Warnings: 0"])
+        self.assertEqual(out, "Balance: $50.00")
 
     def test_poem_lines_are_sentences(self):
         stanza = "The puddle in the schoolyard\nkeeps a copy of the sky.\nClouds pass through it carefully,\na bird goes upside down,"

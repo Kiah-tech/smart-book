@@ -1,4 +1,6 @@
 """MainWindow - navy role-based sidebar + content area (SRS 4.24, Section 5)."""
+import queue
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -16,20 +18,20 @@ ROLE_NAMES = {rules.VISITOR: "Visitor", rules.RC: "Registered Customer",
 SIDEBAR = {
     rules.VISITOR: [("Home", "home", {}), ("Browse", "catalog", {}),
                     ("Search", "catalog", {"focus_search": True}), ("Top Books", "home", {}),
-                    ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12"}),
+                    ("AI Chatbot", "chat", {}),
                     ("Sign In", "login", {}), ("Register", "register", {})],
     rules.RC: [("Home", "home", {}), ("Browse", "catalog", {}),
                ("Recommendations", "placeholder", {"title": "Recommendations", "phase": 3, "uc": "UC-06"}),
                ("My Orders", "orders", {}), ("My Reviews", "my_reviews", {}),
                ("My Balance", "wallet", {}),
-               ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12"}),
+               ("AI Chatbot", "chat", {}),
                ("Sign Out", "logout", {})],
     rules.SU: [("Home", "home", {}),
                ("Manage Books", "placeholder", {"title": "Manage Books", "phase": 4, "uc": "UC-15"}),
                ("Manage Taboo Words", "placeholder", {"title": "Manage Taboo Words", "phase": 4, "uc": "UC-16"}),
                ("User Management", "placeholder", {"title": "User Management", "phase": 4, "uc": "UC-17"}),
                ("Reports", "placeholder", {"title": "Reports", "phase": 4, "uc": "UC-18"}),
-               ("AI Chatbot", "placeholder", {"title": "AI Chatbot", "phase": 3, "uc": "UC-12/13"}),
+               ("AI Chatbot", "chat", {}),
                ("Sign Out", "logout", {})],
 }
 SIDEBAR[rules.VC] = SIDEBAR[rules.RC]
@@ -39,6 +41,7 @@ SCREENS = {
     "home": screens.HomeScreen, "catalog": screens.CatalogScreen, "book": screens.BookDetailScreen,
     "login": screens.LoginScreen, "register": screens.RegisterScreen, "wallet": screens.WalletScreen,
     "orders": screens.OrdersScreen, "my_reviews": screens.MyReviewsScreen,
+    "chat": screens.ChatScreen,
     "placeholder": screens.PlaceholderScreen,
 }
 
@@ -137,6 +140,29 @@ class MainWindow(tk.Tk):
         (R5 promotion, R10 demotion, R7/R10 suspension -> wallet-only mode)."""
         self.session.refresh()
         self.build_sidebar("My Balance" if self.session.wallet_only else self.active)
+
+    def run_async(self, work, on_done) -> None:
+        """Run a slow AI call in a worker thread so the window stays responsive
+        (SRS 4.24: "run in worker thread; GUI stays responsive"). on_done(result, error)
+        is called back on the Tk thread. The UI smoke test replaces this with a direct call."""
+        box = queue.Queue()
+
+        def worker():
+            try:
+                box.put((work(), None))
+            except Exception as e:                       # shown in the screen's banner
+                box.put((None, e))
+
+        def poll():
+            try:
+                result, error = box.get_nowait()
+            except queue.Empty:
+                self.after(100, poll)
+                return
+            on_done(result, error)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.after(100, poll)
 
     # Dialogs go through these two methods so the UI smoke test can answer them.
     def confirm(self, title: str, message: str) -> bool:

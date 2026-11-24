@@ -657,6 +657,111 @@ class MyReviewsScreen(Screen):
         wt.pack(fill="x", pady=4)
 
 
+# ---------------------------------------------------------------- AI Chatbot (UC-12, UC-13, R14)
+def ai_mode_note(parent, ctx) -> None:
+    """Orange strip saying the AI is MOCK / offline (CLAUDE.md: label every mock in the UI)."""
+    if ctx.llm.is_mock or not ctx.llm.is_available():
+        extra = (" Answers are picked from store data and book text, not written by a language model."
+                 if ctx.llm.is_mock else "")
+        tk.Label(parent, text=ctx.llm.mode_label + "." + extra, bg="#fff4e0", fg="#8a5300", font=(FONT, 11),
+                 anchor="w", justify="left", wraplength=880, padx=8, pady=5).pack(fill="x", pady=(0, 8))
+
+
+class ChatScreen(Screen):
+    SOURCE_LABELS = {"RAG": "[Store data]", "GENERAL": "[General AI]", "ADMIN": "[Admin data]",
+                     "DENIED": "[Not available]", "ERROR": "[Offline]"}
+    SCOPE = {rules.VISITOR: "As a Visitor you can ask about the store: books, prices, VIP, fines, policies (R14).",
+             rules.RC: "Ask about the store, your own account (balance, orders, warnings) or anything general (R14).",
+             rules.VC: "Ask about the store, your own account (balance, orders, warnings) or anything general (R14).",
+             rules.SU: "Ask about the store, general questions, or admin data: suspended accounts, sales, "
+                       "warnings, balances, order lists (R14, UC-13)."}
+    EXAMPLES = {rules.VISITOR: ["What does VIP status give me?", "Is there a mystery with a detective?",
+                                "What happens if I don't have enough money?"],
+                rules.RC: ["What is my balance?", "Am I VIP?", "Recommend a science book about the ocean"],
+                rules.SU: ["Which accounts are suspended?", "What are the sales this month?",
+                           "Which books are on the No-Order list?"]}
+
+    def build(self):
+        self.last_response = None
+        ttk.Label(self, text="AI Chatbot", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(self, text=self.SCOPE[self.session.role], style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
+        ai_mode_note(self, self.ctx)
+        if not self.ctx.ai_ready.is_set():
+            self.banner.show("The AI index is still being prepared - store answers may be missing for a moment.", "info")
+        ex = ttk.Frame(self)
+        ex.pack(anchor="w", pady=(0, 6))
+        ttk.Label(ex, text="Try:", style="Muted.TLabel").pack(side="left")
+        for q in self.EXAMPLES[rules.VC if self.session.role == rules.VC else self.session.role]:
+            ttk.Button(ex, text=q, command=lambda q=q: self.use_example(q)).pack(side="left", padx=(6, 0))
+
+        self.log = tk.Text(self, height=20, wrap="word", font=(FONT, 12), state="disabled",
+                           relief="solid", borderwidth=1, padx=10, pady=8)
+        self.log.tag_configure("you", foreground=NAVY, font=(FONT, 12, "bold"), spacing1=8)
+        self.log.tag_configure("label", foreground=MUTED, font=(FONT, 10, "bold"), spacing1=4)
+        self.log.tag_configure("bot", lmargin1=12, lmargin2=12)
+        self.log.tag_configure("denied", foreground=RED, lmargin1=12, lmargin2=12)
+        self.log.pack(fill="both", expand=True)
+
+        row = ttk.Frame(self)
+        row.pack(fill="x", pady=(8, 0))
+        self.entry = ttk.Entry(row, font=(FONT, 13))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=4)
+        self.entry.bind("<KeyRelease>", lambda _e: self.update_send())
+        self.entry.bind("<Return>", lambda _e: self.on_send())
+        self.send_btn = ttk.Button(row, text="Send", style="Primary.TButton", command=self.on_send, state="disabled")
+        self.send_btn.pack(side="left", padx=(8, 0))
+        self.busy = False
+        self.entry.focus_set()
+
+    def use_example(self, q):
+        self.entry.delete(0, "end")
+        self.entry.insert(0, q)
+        self.update_send()
+
+    def update_send(self):
+        """UC-12 E4: Send stays disabled while the question is empty (or an answer is pending)."""
+        ok = bool(self.entry.get().strip()) and not self.busy
+        self.send_btn.configure(state="normal" if ok else "disabled")
+
+    def write(self, text, tag):
+        self.log.configure(state="normal")
+        self.log.insert("end", text + "\n", tag)
+        self.log.configure(state="disabled")
+        self.log.see("end")
+
+    def on_send(self):
+        q = self.entry.get().strip()
+        if not q or self.busy:
+            return
+        self.banner.clear()
+        self.busy = True
+        self.entry.delete(0, "end")
+        self.update_send()
+        self.write("You: " + q, "you")
+        self.log.mark_set("thinking", "end-1c")          # where "…thinking" starts
+        self.log.mark_gravity("thinking", "left")
+        self.write("…thinking", "label")
+        self.app.run_async(lambda: self.ctx.chatbot.ask(self.session, q), self.on_answer)
+
+    def on_answer(self, resp, error):
+        if not self.winfo_exists():                      # user left the screen meanwhile
+            return
+        self.log.configure(state="normal")
+        self.log.delete("thinking", "end-1c")            # remove "…thinking"
+        self.log.configure(state="disabled")
+        self.busy = False
+        self.update_send()
+        if error is not None:
+            self.banner.show(f"The assistant failed: {error}", "error")
+            return
+        self.last_response = resp
+        label = self.SOURCE_LABELS.get(resp.source, resp.source)
+        if self.ctx.llm.is_mock and resp.source in ("RAG", "GENERAL", "ADMIN"):
+            label += " · MOCK AI"
+        self.write(label, "label")
+        self.write(resp.text, "denied" if resp.source in ("DENIED", "ERROR") else "bot")
+
+
 # ---------------------------------------------------------------- not built yet
 class PlaceholderScreen(Screen):
     def build(self):

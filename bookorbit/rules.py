@@ -53,6 +53,18 @@ NO_ORDER_BELOW = 2.0
 TO_ORDER_ABOVE = 4.0
 LIST_NONE, LIST_NO_ORDER, LIST_TO_ORDER = "NONE", "NO_ORDER", "TO_ORDER"
 
+# R14 - chatbot access: which question intents each role may ask (SRS 4.20 PERMITTED)
+STORE, ACCOUNT, GENERAL, ADMIN = "STORE", "ACCOUNT", "GENERAL", "ADMIN"
+CHAT_PERMITTED = {
+    VISITOR: {STORE},
+    RC: {STORE, ACCOUNT, GENERAL},
+    VC: {STORE, ACCOUNT, GENERAL},
+    SU: {STORE, ACCOUNT, GENERAL, ADMIN},
+}
+
+# R15 - Reading Companion: chapters readable without owning the book
+FREE_CHAPTERS = 1
+
 # UC-01 step 4 - registration validation
 USERNAME_PATTERN = r"^[A-Za-z0-9_]{3,20}$"
 EMAIL_PATTERN = r"^[^@ ]+@[^@ ]+\.[^@ ]+$"

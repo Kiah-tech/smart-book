@@ -87,17 +87,18 @@ def _overlap(a: set, sentence: str) -> int:
 
 
 def _best_sentences(query: str, texts: list[str], k: int) -> list[str]:
-    """The k sentences sharing the most words with the query, in their original order."""
+    """The k sentences sharing the most words with the query, best first. Ties go to the
+    shorter, more precise sentence, so "Your balance: $50.00" beats a long policy
+    paragraph that merely mentions balances."""
     q = set(tokens(query))
-    pool = [s for t in texts for s in sentences(t)]
-    scored = [(_overlap(q, s), i, s) for i, s in enumerate(pool)]
-    top = [x for x in sorted(scored, key=lambda x: (-x[0], x[1])) if x[0] > 0][:k]
-    seen, out = set(), []
-    for _sc, _i, s in sorted(top, key=lambda x: x[1]):
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
+    # short facts such as "Your balance: $50.00" are not "sentences" (< 4 words): keep them whole
+    pool = list(dict.fromkeys(s for t in texts for s in (sentences(t) or [t.strip()])))
+    scored = []
+    for i, s in enumerate(pool):
+        overlap = _overlap(q, s)
+        if overlap:
+            scored.append((-overlap, -overlap / max(1, len(tokens(s))), i, s))
+    return [s for *_rank, s in sorted(scored)[:k]]
 
 
 # ---------------------------------------------------------------- tasks
@@ -106,16 +107,17 @@ def answer(question: str, facts: list[str]) -> str:
     if not facts:
         return ("I'm running without a language model (MOCK mode), so I can't answer general "
                 "questions. Ask me about the store, or start Ollama and set LLM_MODE=real.")
-    best = _best_sentences(question, facts, 3)
+    best = _best_sentences(question, facts, 2)
     if not best:                                # facts were retrieved but share no words
         best = sentences(facts[0])[:2] or [facts[0]]
     return " ".join(best)
 
 
-def classify(_question: str) -> str:
-    """The STORE/GENERAL fallback classifier (SRS 4.20). The mock cannot judge meaning,
-    so anything the keyword rules did not catch counts as GENERAL."""
-    return "GENERAL"
+def classify(_question: str, store_context: list[str]) -> str:
+    """The STORE/GENERAL fallback classifier (SRS 4.20). The mock cannot judge meaning, so
+    it uses retrieval as a proxy: if the question matches some store chunk (policy or
+    catalog) it is a STORE question, otherwise GENERAL (ASSUMPTIONS A-27)."""
+    return "STORE" if store_context else "GENERAL"
 
 
 def summarize(chunks: list[str], points: int = 5) -> str:

@@ -66,7 +66,7 @@ class MockLLM(LLMClient):
                  context=None, question=""):
         context = context or []
         if task == "classify":
-            return mock_llm.classify(question)
+            return mock_llm.classify(question, context)
         if task == "summarize":
             return mock_llm.summarize(context)
         if task == "explain":

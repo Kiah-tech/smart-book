@@ -43,15 +43,51 @@ class UISmokeTests(TempStoreCase):
     def test_all_roles_in_one_window(self):
         # One test on purpose: on macOS, creating a second Tk root in the same
         # process after destroying the first can hang inside update().
+        self.win.run_async = lambda work, done: self.run_now(work, done)   # no worker threads in tests
         self.visit_all(rules.VISITOR)
+        self.visitor_chat()
         session = self.ctx.auth.login("pat", FACE, make_face_photo("pat", 1, 1))
         self.win.on_login(session)
         self.visit_all(rules.RC)
         self.phase2_flows()
+        self.phase3_flows()
         self.ctx.fs.update("users", "username", "pat", {"status": rules.SUSPENDED})
         session.refresh()
         self.win.show("catalog")                     # R8: redirected to the wallet
         self.assertEqual(type(self.win.current).__name__, "WalletScreen")
+
+    @staticmethod
+    def run_now(work, done):
+        try:
+            result = work()
+        except Exception as e:
+            done(None, e)
+        else:
+            done(result, None)
+
+    def chat(self, question):
+        """UC-12 through the real ChatScreen; returns the ChatResponse it received."""
+        if self.screen() != "ChatScreen":
+            self.win.show("chat")
+        chat = self.win.current
+        self.assertEqual(str(chat.send_btn["state"]), "disabled")         # E4: empty -> disabled
+        chat.use_example(question)
+        self.assertEqual(str(chat.send_btn["state"]), "normal")
+        chat.on_send()
+        self.win.update()
+        self.assertIn(question, chat.log.get("1.0", "end"))
+        self.assertNotIn("…thinking", chat.log.get("1.0", "end"))
+        return chat.last_response
+
+    def visitor_chat(self):
+        self.assertEqual(self.chat("Tell me a joke").source, "DENIED")      # UC-12 E2
+        self.assertIn("[Not available]", self.win.current.log.get("1.0", "end"))
+
+    def phase3_flows(self):
+        """UC-12 / UC-13 / UC-14 / UC-04 cover search through the real screens."""
+        r = self.chat("What is my balance?")                             # UC-12 ACCOUNT
+        self.assertEqual(r.source, "RAG")
+        self.assertIn("[Store data] · MOCK AI", self.win.current.log.get("1.0", "end"))
 
     def screen(self):
         return type(self.win.current).__name__
