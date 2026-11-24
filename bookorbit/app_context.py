@@ -4,10 +4,12 @@ Wiring follows the collaboration diagram (SRS Figure 1): StatusManager is shared
 by WalletService, PurchaseService and WarningService, because it is the only
 class allowed to change a role or status.
 """
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 
 from bookorbit.ai.biometrics import BiometricEngine, get_engine
 from bookorbit.ai.llm import LLMClient, get_llm
+from bookorbit.ai.rag import RAGRetriever
 from bookorbit.ai.recommendations import RecommendationEngine
 from bookorbit.config import load_config
 from bookorbit.persistence.filestore import FileStore
@@ -39,6 +41,8 @@ class AppContext:
     reviews: ReviewService
     catalog: CatalogService
     recs: RecommendationEngine
+    rag: RAGRetriever              # SRS 4.21
+    ai_ready: threading.Event = field(default_factory=threading.Event)   # set when indexing is done
 
 
 def build_context(config: dict | None = None, data_dir: str | None = None) -> AppContext:
@@ -58,4 +62,22 @@ def build_context(config: dict | None = None, data_dir: str | None = None) -> Ap
         config=cfg, fs=fs, bio=bio, llm=llm, auth=AuthService(fs, bio), status=status, wallet=wallet,
         purchases=purchases, taboo=taboo, moderation=moderation, warnings=warnings, ratings=ratings,
         reviews=reviews, catalog=CatalogService(fs, reviews, purchases=purchases),
-        recs=RecommendationEngine(fs))
+        recs=RecommendationEngine(fs), rag=RAGRetriever(fs, llm))
+
+
+def build_ai_indexes(ctx: AppContext) -> None:
+    """SRS 4.24 MainWindow.run: build the AI indexes (RAG chunks; the cover index in step 7).
+    Always sets ctx.ai_ready, even if a model is offline, so nobody waits forever."""
+    try:
+        ctx.rag.build_index()
+    finally:
+        ctx.ai_ready.set()
+
+
+def start_ai_indexing(ctx: AppContext) -> threading.Thread:
+    """Run build_ai_indexes in a background thread so the window opens at once
+    (SRS 4.24: "background thread, splash text meanwhile"). Only this thread writes
+    rag_chunks.txt; FileStore's lock keeps its book updates safe next to the GUI's."""
+    t = threading.Thread(target=build_ai_indexes, args=(ctx,), name="ai-indexing", daemon=True)
+    t.start()
+    return t

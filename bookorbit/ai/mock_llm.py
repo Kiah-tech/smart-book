@@ -4,7 +4,7 @@ Why it exists: Ollama is not installed on the demo machine (ASSUMPTIONS M-08), b
 chatbot (UC-12/13) and the Reading Companion (UC-14) must still be demonstrable. So the
 mock does the two jobs an LLM does in the SRS, in the simplest honest way:
 
-* embed(text)  - a "hashed bag of words": every content word is hashed to one of 512
+* embed(text)  - a "hashed bag of words": every content word is hashed to one of 2048
   positions and counted. Texts that share words point in similar directions, so cosine
   similarity really finds the relevant chunks (SRS 4.21 retrieve). It knows nothing about
   meaning: "car" and "automobile" are unrelated to it.
@@ -21,7 +21,7 @@ from collections import Counter
 
 import numpy as np
 
-EMBED_DIM = 512
+EMBED_DIM = 2048
 EMBED_MODEL_ID = f"mock-hashed-bow-{EMBED_DIM}"   # stored with every vector (re-index on change)
 
 STOPWORDS = set("""
@@ -31,7 +31,7 @@ has have having he her here hers herself him himself his how i if in into is it 
 me more most my myself no nor not now of off on once only or other our ours ourselves out over own
 same she should so some such than that the their theirs them themselves then there these they
 this those through to too under until up very was we were what when where which while who whom
-why will with would you your yours yourself yourselves said says say one two three get got let
+why will with would you your yours yourself yourselves said says say one two three get got let book
 like make made many much may might must shall still upon well went yes back every never always
 """.split())
 

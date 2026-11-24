@@ -37,6 +37,17 @@ class TempStoreCase(unittest.TestCase):
         b.update(over)
         return self.fs.append("books", b)
 
+    def add_text_book(self, text: str, **over):
+        """A book with a full text in data/texts/ (UC-14, R15)."""
+        bid = self.fs.next_id("books", "B")
+        rel = f"texts/{bid}.txt"
+        self.fs.resolve(rel).parent.mkdir(parents=True, exist_ok=True)
+        self.fs.resolve(rel).write_text(text, encoding="utf-8")
+        return self.add_book(book_id=bid, text_path=rel, **over)
+
+    def write_policies(self, *paragraphs):
+        (self.fs.dir / "policies.txt").write_text("\n\n".join(paragraphs), encoding="utf-8")
+
     def add_user(self, username="pat", role=rules.RC, status=rules.ACTIVE, balance=0.0, **over):
         """A customer record written straight to users.txt (no biometrics needed)."""
         u = {"user_id": self.fs.next_id("users", "U"), "username": username, "full_name": username.title(),

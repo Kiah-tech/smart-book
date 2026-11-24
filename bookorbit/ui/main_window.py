@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from bookorbit import rules
+from bookorbit.app_context import start_ai_indexing
 from bookorbit.services.session import Session
 from bookorbit.ui import screens
 from bookorbit.ui.widgets import BG, FONT, NAVY, NAVY_HI, ORANGE, setup_styles
@@ -60,8 +61,12 @@ class MainWindow(tk.Tk):
         self.sidebar.pack_propagate(False)
         self.content = ttk.Frame(self, padding=20)
         self.content.pack(side="left", fill="both", expand=True)
+        # SRS 4.24: build the AI indexes in a background thread; the sidebar shows
+        # "Preparing AI index..." (the splash text) until they are ready.
+        self.indexer = start_ai_indexing(ctx)
         self.build_sidebar()
         self.show("home")
+        self.after(300, self._poll_ai)
 
     # ---------------------------------------------------------------- sidebar
     def build_sidebar(self, active: str = "Home") -> None:
@@ -84,12 +89,26 @@ class MainWindow(tk.Tk):
             btn.pack(fill="x")
             btn.bind("<Button-1>", lambda _e, l=label, sc=screen, kw=kwargs: self._nav(l, sc, kw))
         # Which AI parts are real and which are mocked (CLAUDE.md: label every MOCK in the UI)
-        modes = [self.ctx.llm.mode_label]
+        modes = [self.ai_status_text(), self.ctx.llm.mode_label]
         if self.ctx.bio.is_mock:
             modes.append("MOCK biometrics")
-        tk.Label(self.sidebar, text="\n".join(modes) + "\n(see docs/ASSUMPTIONS.md)", bg=NAVY,
+        tk.Label(self.sidebar, text="\n".join(m for m in modes if m) + "\n(see docs/ASSUMPTIONS.md)", bg=NAVY,
                  fg="#8f9bb8", font=(FONT, 10), justify="left", padx=18, wraplength=180).pack(
             side="bottom", anchor="w", pady=12)
+
+    def ai_status_text(self) -> str:
+        if not self.ctx.ai_ready.is_set():
+            return "⏳ Preparing AI index…"
+        if not self.ctx.rag.ready:
+            return "AI index unavailable (model offline)"
+        return ""
+
+    def _poll_ai(self) -> None:
+        """Redraw the sidebar once the background indexing has finished."""
+        if self.ctx.ai_ready.is_set():
+            self.build_sidebar(self.active)
+        else:
+            self.after(300, self._poll_ai)
 
     def _nav(self, label, screen, kwargs):
         if screen == "logout":

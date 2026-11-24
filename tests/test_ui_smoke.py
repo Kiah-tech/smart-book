@@ -21,9 +21,11 @@ class UISmokeTests(TempStoreCase):
         except tk.TclError as e:
             self.skipTest(f"no display: {e}")
         self.win.withdraw()
+        self.assertTrue(self.ctx.ai_ready.wait(30))      # background AI indexing (SRS 4.24)
 
     def tearDown(self):
         if hasattr(self, "win"):
+            self.ctx.ai_ready.wait(30)                   # never delete data/ under the indexing thread
             self.win.destroy()
         super().tearDown()
 
