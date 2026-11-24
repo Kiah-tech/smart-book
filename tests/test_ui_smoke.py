@@ -8,6 +8,7 @@ from bookorbit.ai.biometrics import FACE
 from bookorbit.ui.main_window import SIDEBAR, MainWindow
 from seed import make_face_photo
 from tests.helpers import TempStoreCase
+from tests.test_companion import TEXT as COMPANION_TEXT
 
 
 class UISmokeTests(TempStoreCase):
@@ -15,6 +16,7 @@ class UISmokeTests(TempStoreCase):
         super().setUp()
         for i in range(15):
             self.add_book(title=f"Book {i:02d}", browse_count=i)
+        self.text_book = self.add_text_book(COMPANION_TEXT, title="The Lighthouse Book")   # B-0016 (UC-14)
         self.ctx.auth.register("Pat", "pat", "p@x.com", make_face_photo("pat", 1, 0))
         try:
             self.win = MainWindow(self.ctx)
@@ -88,6 +90,43 @@ class UISmokeTests(TempStoreCase):
         r = self.chat("What is my balance?")                             # UC-12 ACCOUNT
         self.assertEqual(r.source, "RAG")
         self.assertIn("[Store data] · MOCK AI", self.win.current.log.get("1.0", "end"))
+        self.companion_flows()
+
+    def companion_flows(self):
+        """UC-14: preview (R15), E2 + Buy, then every chapter and the AI tools."""
+        bid = self.text_book["book_id"]
+        self.ctx.wallet.deposit(self.win.session, "50")
+        self.win.show("companion", book_id=bid)
+        comp = self.win.current
+        self.assertEqual(self.screen(), "CompanionScreen")
+        self.assertFalse(comp.state.owned)
+        self.assertIn("The Light", comp.text.get("1.0", "end"))
+        comp.show_chapter(2)                                             # E2: locked chapter
+        self.assertIn("Buy the book", comp.banner.text)
+        comp.buy()                                                       # confirm() answered yes
+        self.win.update()
+        comp = self.win.current
+        self.assertEqual(self.screen(), "CompanionScreen")
+        self.assertTrue(comp.state.owned)
+        comp.show_chapter(3)
+        self.assertIn("violent storm", comp.text.get("1.0", "end"))
+        comp.on_summarize()
+        self.assertIn("Summary of chapter 3", comp.answer.get("1.0", "end"))
+        comp.on_explain()                                                # E3: nothing selected
+        self.assertIn("Select a passage first", comp.banner.text)
+        comp.text.tag_add("sel", "3.0", "3.30")
+        comp.on_explain()
+        self.assertIn("Explanation", comp.answer.get("1.0", "end"))
+        comp.on_quiz()
+        self.assertEqual(len(comp.quiz), 3)
+        for q, var in zip(comp.quiz, comp.quiz_vars):
+            var.set(q["answer_index"])
+        self.assertEqual(comp.check_quiz(), 3)
+        comp.question.insert(0, "Why did the lamp fail?")
+        comp.on_ask()
+        self.assertIn("Answer", comp.answer.get("1.0", "end"))
+        self.win.show("book", book_id="B-0001")                          # E1: no text -> disabled button
+        self.win.update()
 
     def screen(self):
         return type(self.win.current).__name__

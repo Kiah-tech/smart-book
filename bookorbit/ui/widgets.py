@@ -79,6 +79,9 @@ class Banner(ttk.Frame):
     def clear(self):
         self.text = ""
         self.label.pack_forget()
+        for w in self.winfo_children():            # e.g. the "Buy Now" button of UC-14 E2
+            if w is not self.label:
+                w.destroy()
 
 
 def stars(avg: float) -> str:

@@ -41,7 +41,7 @@ SCREENS = {
     "home": screens.HomeScreen, "catalog": screens.CatalogScreen, "book": screens.BookDetailScreen,
     "login": screens.LoginScreen, "register": screens.RegisterScreen, "wallet": screens.WalletScreen,
     "orders": screens.OrdersScreen, "my_reviews": screens.MyReviewsScreen,
-    "chat": screens.ChatScreen,
+    "chat": screens.ChatScreen, "companion": screens.CompanionScreen,
     "placeholder": screens.PlaceholderScreen,
 }
 

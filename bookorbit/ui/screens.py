@@ -7,7 +7,7 @@ from tkinter import filedialog, ttk
 
 from bookorbit import rules
 from bookorbit.ai.biometrics import FACE, VOICE
-from bookorbit.errors import (LoginError, NoFaceError, NotFound, NoVoiceError, PurchaseError, RegistrationError,
+from bookorbit.errors import (CompanionError, LoginError, NoFaceError, NotFound, NoVoiceError, PurchaseError, RegistrationError,
                               TemplateMissingError)
 from bookorbit.services.catalog import FIELDS
 from bookorbit.ui.widgets import (CARD, FONT, GREEN, MUTED, NAVY, RED, Banner, BookCard, ScrollFrame, draw_cover,
@@ -197,8 +197,58 @@ class CatalogScreen(Screen):
         self.next_btn.configure(state="normal" if self.page < pages else "disabled")
 
 
+# ---------------------------------------------------------------- Buy Now, shared (UC-08, UC-09)
+class BuyMixin:
+    """Buy Now dialog + receipt, used by the book page and the Reading Companion (UC-14 E2)."""
+
+    def after_buy(self, book_id):
+        """Where to go after a purchase attempt (the book page by default)."""
+        self.app.show("book", book_id=book_id)
+
+    def on_buy(self, book):
+        self.banner.clear()
+        try:
+            q = self.ctx.purchases.quote(self.session, book["book_id"])   # fresh price (UC-09 E1)
+        except (PermissionError, PurchaseError) as e:                     # E4 / book gone
+            self.banner.show(str(e), "error")
+            return
+        p = q.price
+        lines = [f"Buy \"{book['title']}\"?", "", f"List price:     ${p.list:.2f}"]
+        if p.discount > 0:
+            lines.append(f"VIP discount:  -${p.discount:.2f} (10%)")
+        lines += [f"You pay:        ${p.paid:.2f}", f"Your balance:  ${q.balance:.2f}"]
+        if q.insufficient:                     # decision A-20: warn before the R7 fine is charged
+            lines += ["", f"⚠ Your balance is too low. If you confirm, the purchase is rejected and a "
+                          f"${rules.FINE_AMOUNT:.2f} fine is charged (R7)."]
+            if q.fine_would_suspend:
+                lines.append("The fine would take your balance below $0.00, so your account would be SUSPENDED.")
+        if not self.app.confirm("Confirm purchase", "\n".join(lines)):
+            return                                                         # E5: nothing changes
+        try:
+            r = self.ctx.purchases.purchase(self.session, book["book_id"])
+        except PurchaseError as e:                                         # E1 / E2 / E3
+            self.app.set_flash(str(e), "error")
+            self.app.refresh_chrome()          # E2: suspended -> wallet-only sidebar
+            self.after_buy(book["book_id"])  # redirected to the wallet if suspended
+            return
+        except PermissionError as e:
+            self.banner.show(str(e), "error")
+            return
+        receipt = [f"Receipt - {r.title}", "", f"List price:     ${r.list_price:.2f}"]
+        if r.discount > 0:
+            receipt.append(f"VIP discount:  -${r.discount:.2f} (VIP -10%)")
+        receipt += [f"Amount paid:   ${r.paid:.2f}", f"New balance:    ${r.balance:.2f}"]
+        if r.promoted:                         # R5; the discount starts next time (R6, UC-09 E2)
+            receipt += ["", "👑 You are now a VIP Customer! Your 10% discount starts with your next purchase."]
+        self.app.inform("Purchase complete", "\n".join(receipt))
+        self.app.set_flash(f"You bought \"{r.title}\" for ${r.paid:.2f}."
+                           + (" You are now a VIP Customer!" if r.promoted else ""), "ok")
+        self.app.refresh_chrome()
+        self.after_buy(book["book_id"])
+
+
 # ---------------------------------------------------------------- Book details (UC-05)
-class BookDetailScreen(Screen):
+class BookDetailScreen(BuyMixin, Screen):
     def build(self):
         try:
             book = self.ctx.catalog.get_details(self.kwargs["book_id"], self.session)
@@ -245,9 +295,14 @@ class BookDetailScreen(Screen):
                 ttk.Label(buttons, text="✔ You reviewed this book", foreground=GREEN).pack(side="left", padx=(0, 12))
             else:
                 ttk.Button(buttons, text="Write Review", command=self.toggle_review_form).pack(side="left", padx=(0, 8))
-            comp = ttk.Button(buttons, text="Reading Companion", state="disabled")
-            comp.pack(side="left", padx=(0, 8))
-            Tooltip(comp, "The Smart Reading Companion (UC-14) arrives in Phase 3.")
+            if book.get("text_path"):                      # UC-14, R15
+                ttk.Button(buttons, text="📖 Reading Companion",
+                           command=lambda: self.app.show("companion", book_id=book["book_id"])).pack(
+                    side="left", padx=(0, 8))
+            else:                                          # UC-14 E1
+                comp = ttk.Button(buttons, text="📖 Reading Companion", state="disabled")
+                comp.pack(side="left", padx=(0, 8))
+                Tooltip(comp, "The Reading Companion isn't available for this book (no full text).")
             self.review_form = self.build_review_form(info, book)
         elif self.session.role == rules.VISITOR:
             ttk.Label(buttons, text="Sign in to buy, review or read this book.", style="Muted.TLabel").pack()
@@ -268,48 +323,6 @@ class BookDetailScreen(Screen):
             tk.Label(card, text=head, bg=CARD, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
             tk.Label(card, text=r["display_text"], bg=CARD, anchor="w", justify="left",
                      wraplength=820).pack(fill="x")
-
-    # ---- Buy Now (UC-08, UC-09)
-    def on_buy(self, book):
-        self.banner.clear()
-        try:
-            q = self.ctx.purchases.quote(self.session, book["book_id"])   # fresh price (UC-09 E1)
-        except (PermissionError, PurchaseError) as e:                     # E4 / book gone
-            self.banner.show(str(e), "error")
-            return
-        p = q.price
-        lines = [f"Buy \"{book['title']}\"?", "", f"List price:     ${p.list:.2f}"]
-        if p.discount > 0:
-            lines.append(f"VIP discount:  -${p.discount:.2f} (10%)")
-        lines += [f"You pay:        ${p.paid:.2f}", f"Your balance:  ${q.balance:.2f}"]
-        if q.insufficient:                     # decision A-20: warn before the R7 fine is charged
-            lines += ["", f"⚠ Your balance is too low. If you confirm, the purchase is rejected and a "
-                          f"${rules.FINE_AMOUNT:.2f} fine is charged (R7)."]
-            if q.fine_would_suspend:
-                lines.append("The fine would take your balance below $0.00, so your account would be SUSPENDED.")
-        if not self.app.confirm("Confirm purchase", "\n".join(lines)):
-            return                                                         # E5: nothing changes
-        try:
-            r = self.ctx.purchases.purchase(self.session, book["book_id"])
-        except PurchaseError as e:                                         # E1 / E2 / E3
-            self.app.set_flash(str(e), "error")
-            self.app.refresh_chrome()          # E2: suspended -> wallet-only sidebar
-            self.app.show("book", book_id=book["book_id"])  # redirected to the wallet if suspended
-            return
-        except PermissionError as e:
-            self.banner.show(str(e), "error")
-            return
-        receipt = [f"Receipt - {r.title}", "", f"List price:     ${r.list_price:.2f}"]
-        if r.discount > 0:
-            receipt.append(f"VIP discount:  -${r.discount:.2f} (VIP -10%)")
-        receipt += [f"Amount paid:   ${r.paid:.2f}", f"New balance:    ${r.balance:.2f}"]
-        if r.promoted:                         # R5; the discount starts next time (R6, UC-09 E2)
-            receipt += ["", "👑 You are now a VIP Customer! Your 10% discount starts with your next purchase."]
-        self.app.inform("Purchase complete", "\n".join(receipt))
-        self.app.set_flash(f"You bought \"{r.title}\" for ${r.paid:.2f}."
-                           + (" You are now a VIP Customer!" if r.promoted else ""), "ok")
-        self.app.refresh_chrome()
-        self.app.show("book", book_id=book["book_id"])
 
     # ---- Write Review (UC-10, UC-11)
     def build_review_form(self, parent, book):
@@ -760,6 +773,184 @@ class ChatScreen(Screen):
             label += " · MOCK AI"
         self.write(label, "label")
         self.write(resp.text, "denied" if resp.source in ("DENIED", "ERROR") else "bot")
+
+
+# ---------------------------------------------------------------- Smart Reading Companion (UC-14, R15)
+class CompanionScreen(BuyMixin, Screen):
+    def build(self):
+        self.quiz_vars, self.quiz = [], []
+        book_id = self.kwargs["book_id"]
+        ttk.Button(self, text="‹ Back to book", command=lambda: self.app.show("book", book_id=book_id)).pack(anchor="w")
+        try:
+            self.state = self.ctx.companion.open(self.session, book_id)
+        except (CompanionError, PermissionError) as e:                  # E1
+            self.banner.show(str(e), "error")
+            self.state = None
+            return
+        st = self.state
+        head = ttk.Frame(self)
+        head.pack(fill="x", pady=(6, 4))
+        ttk.Label(head, text=f"📖 {st.book['title']}", style="H1.TLabel").pack(side="left")
+        if st.owned:
+            ttk.Label(head, text="You own this book: every chapter is open.", foreground=GREEN).pack(side="left", padx=12)
+        else:
+            ttk.Label(head, text=f"Preview: chapter {rules.FREE_CHAPTERS} only (R15).",
+                      foreground="#8a5300").pack(side="left", padx=12)
+            ttk.Button(head, text="Buy Now", style="Primary.TButton", command=self.buy).pack(side="left")
+        ai_mode_note(self, self.ctx)
+
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True)
+        self.chapter_list = tk.Listbox(body, width=30, font=(FONT, 12), activestyle="none", exportselection=False)
+        for n, title in st.chapters:
+            self.chapter_list.insert("end", f"{n}. {title}" if st.readable(n) else f"🔒 {n}. {title}")
+        self.chapter_list.pack(side="left", fill="y")
+        self.chapter_list.bind("<<ListboxSelect>>", lambda _e: self.on_pick_chapter())
+        self.text = tk.Text(body, wrap="word", font=("Georgia", 13), padx=14, pady=10, height=16,
+                            relief="solid", borderwidth=1, spacing2=3)
+        self.text.pack(side="left", fill="both", expand=True, padx=(10, 0))
+
+        tools = ttk.Frame(self)
+        tools.pack(fill="x", pady=8)
+        for label, cmd in (("Summarize chapter", self.on_summarize), ("Explain selection", self.on_explain),
+                           ("Define selected word", self.on_define), ("Quiz me", self.on_quiz)):
+            ttk.Button(tools, text=label, command=cmd).pack(side="left", padx=(0, 6))
+        self.question = ttk.Entry(tools, width=36, font=(FONT, 12))
+        self.question.pack(side="left", padx=(12, 6), ipady=2)
+        self.question.bind("<Return>", lambda _e: self.on_ask())
+        ttk.Button(tools, text="Ask", style="Primary.TButton", command=self.on_ask).pack(side="left")
+
+        self.answer_box = ttk.Frame(self, style="Card.TFrame", padding=10)
+        self.answer_box.pack(fill="both")
+        self.answer = tk.Text(self.answer_box, wrap="word", font=(FONT, 12), height=7, relief="flat",
+                              bg=CARD, state="disabled")
+        self.answer.pack(fill="both")
+        self.show_chapter(st.chapter)                                    # resume where they stopped
+
+    # ---- reading
+    def show_chapter(self, n):
+        try:
+            body = self.ctx.companion.load_chapter(self.state, n)
+        except CompanionError as e:                                      # E2 (R15)
+            self.show_error(e)
+            self.chapter_list.selection_clear(0, "end")
+            self.chapter_list.selection_set(self.state.chapter - 1)
+            return
+        self.banner.clear()
+        self.chapter_list.selection_clear(0, "end")
+        self.chapter_list.selection_set(n - 1)
+        title = dict(self.state.chapters)[n]
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", f"Chapter {n}: {title}\n\n{body}")
+        self.text.configure(state="disabled")                            # selectable, not editable
+
+    def on_pick_chapter(self):
+        sel = self.chapter_list.curselection()
+        if sel and sel[0] + 1 != self.state.chapter:
+            self.show_chapter(sel[0] + 1)
+
+    def show_error(self, e):
+        self.banner.clear()
+        self.banner.show(str(e), "warn" if getattr(e, "buy", False) else "error")
+        if getattr(e, "buy", False):                                     # E2: "with a Buy button"
+            ttk.Button(self.banner, text="Buy Now", style="Primary.TButton", command=self.buy).pack(anchor="w")
+
+    def buy(self):
+        self.on_buy(self.state.book)
+
+    def after_buy(self, book_id):                                        # back here, now owned
+        self.app.show("companion", book_id=book_id)
+
+    def selection(self) -> str:
+        try:
+            return self.text.get("sel.first", "sel.last")
+        except tk.TclError:
+            return ""
+
+    # ---- AI actions (run in a worker thread)
+    def run(self, title, work, render=None):
+        self.banner.clear()
+        self.set_answer(f"{title}: thinking…")
+        self.app.run_async(work, lambda result, error: self.on_result(title, result, error, render))
+
+    def on_result(self, title, result, error, render):
+        if not self.winfo_exists():
+            return
+        if error is not None:                                            # E2 / E3 / E4
+            self.set_answer("")
+            self.show_error(error)
+            return
+        if render:
+            render(result)
+        else:
+            tag = " (MOCK AI)" if self.ctx.llm.is_mock else ""
+            self.set_answer(f"{title}{tag}\n\n{result}")
+
+    def set_answer(self, text):
+        for w in self.answer_box.winfo_children():
+            if w is not self.answer:
+                w.destroy()
+        self.answer.configure(state="normal")
+        self.answer.delete("1.0", "end")
+        self.answer.insert("1.0", text)
+        self.answer.configure(state="disabled")
+        self.answer.pack(fill="both")
+
+    def on_summarize(self):
+        n = self.state.chapter
+        self.run(f"Summary of chapter {n}", lambda: self.ctx.companion.summarize(self.state, n))
+
+    def on_explain(self):
+        sel = self.selection()
+        self.run("Explanation", lambda: self.ctx.companion.explain(self.state, sel))
+
+    def on_define(self):
+        words = self.selection().split()
+        word = words[0] if words else ""
+        self.run(f"Meaning of '{word}'", lambda: self.ctx.companion.define(self.state, word))
+
+    def on_ask(self):
+        q = self.question.get()
+        self.run("Answer", lambda: self.ctx.companion.ask(self.state, q))
+
+    def on_quiz(self):
+        n = self.state.chapter
+        self.run(f"Quiz on chapter {n}", lambda: self.ctx.companion.quiz(self.state, n), self.render_quiz)
+
+    def render_quiz(self, questions):
+        """3 multiple-choice questions; the correct answers stay hidden until the reader
+        clicks Check answers (UC-14 step 5)."""
+        self.answer.pack_forget()
+        self.quiz, self.quiz_vars = questions, []
+        mock = " (MOCK AI: fill-in-the-blank from the text)" if self.ctx.llm.is_mock else ""
+        ttk.Label(self.answer_box, text=f"Quiz on chapter {self.state.chapter}{mock}", style="Card.TLabel",
+                  font=(FONT, 12, "bold")).pack(anchor="w")
+        self.quiz_marks = []
+        for i, q in enumerate(questions):
+            var = tk.IntVar(value=-1)
+            self.quiz_vars.append(var)
+            ttk.Label(self.answer_box, text=f"{i + 1}. {q['q']}", style="Card.TLabel", wraplength=900).pack(anchor="w", pady=(6, 0))
+            row = ttk.Frame(self.answer_box, style="Card.TFrame")
+            row.pack(anchor="w")
+            for j, opt in enumerate(q["options"]):
+                ttk.Radiobutton(row, text=opt, value=j, variable=var).pack(side="left", padx=(0, 12))
+            mark = ttk.Label(self.answer_box, text="", style="Card.TLabel")
+            mark.pack(anchor="w")
+            self.quiz_marks.append(mark)
+        ttk.Button(self.answer_box, text="Check answers", command=self.check_quiz).pack(anchor="w", pady=(6, 0))
+
+    def check_quiz(self):
+        score = 0
+        for q, var, mark in zip(self.quiz, self.quiz_vars, self.quiz_marks):
+            right = q["options"][q["answer_index"]]
+            if var.get() == q["answer_index"]:
+                score += 1
+                mark.configure(text="✔ Correct", foreground=GREEN)
+            else:
+                mark.configure(text=f"✘ The answer is: {right}", foreground=RED)
+        self.banner.show(f"You got {score} of {len(self.quiz)} right.", "ok" if score == len(self.quiz) else "info")
+        return score
 
 
 # ---------------------------------------------------------------- not built yet

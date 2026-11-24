@@ -78,6 +78,14 @@ class MockLLMTests(unittest.TestCase):
                                 context=["Role: RC", "Balance: $50.00", "Warnings: 0"])
         self.assertEqual(out, "Balance: $50.00")
 
+    def test_chunk_border_fragment_is_not_quoted_twice(self):
+        # two overlapping chunks: the first ends mid-sentence, the second has it whole
+        a = "The clocks were slow. If the museum clocks were twelve minutes slow, Brandt could"
+        b = "If the museum clocks were twelve minutes slow, Brandt could not have stopped the tower clock."
+        self.assertEqual(mock_llm.unique_sentences([a, b]), ["The clocks were slow.", b])
+        out = self.llm.generate("p", task="answer", question="Why were the museum clocks slow?", context=[a, b])
+        self.assertEqual(out.count("If the museum clocks"), 1)
+
     def test_poem_lines_are_sentences(self):
         stanza = "The puddle in the schoolyard\nkeeps a copy of the sky.\nClouds pass through it carefully,\na bird goes upside down,"
         self.assertEqual(len(mock_llm.sentences(stanza)), 4)

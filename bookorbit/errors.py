@@ -46,6 +46,14 @@ class LLMUnavailable(ModelUnavailable):
     Screens show "The assistant is offline" (UC-12 E3, UC-14 E4)."""
 
 
+class CompanionError(BookOrbitError):
+    """UC-14 E1-E4. buy=True for E2 ("Buy the book to keep reading"): the screen shows a Buy button."""
+
+    def __init__(self, message: str, buy: bool = False):
+        self.buy = buy
+        super().__init__(message)
+
+
 class NotFound(BookOrbitError):
     """UC-05 E1: book no longer exists."""
 

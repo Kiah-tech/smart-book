@@ -82,6 +82,15 @@ def embed(text: str) -> np.ndarray:
     return v / norm
 
 
+def unique_sentences(texts: list[str], keep_short: bool = False) -> list[str]:
+    """Sentences of several chunks, in order, without repeats. Chunks overlap by 40 words
+    (SRS 4.21), so a sentence cut at a chunk border appears once whole and once as a
+    fragment ("... Brandt could"); a fragment contained in a longer sentence is dropped.
+    keep_short: keep a text with no full sentence (e.g. "Balance: $50.00") as one item."""
+    pool = list(dict.fromkeys(s for t in texts for s in (sentences(t) or ([t.strip()] if keep_short else []))))
+    return [s for s in pool if not any(s != other and s in other for other in pool)]
+
+
 def _overlap(a: set, sentence: str) -> int:
     return len(a & set(tokens(sentence)))
 
@@ -91,8 +100,7 @@ def _best_sentences(query: str, texts: list[str], k: int) -> list[str]:
     shorter, more precise sentence, so "Your balance: $50.00" beats a long policy
     paragraph that merely mentions balances."""
     q = set(tokens(query))
-    # short facts such as "Your balance: $50.00" are not "sentences" (< 4 words): keep them whole
-    pool = list(dict.fromkeys(s for t in texts for s in (sentences(t) or [t.strip()])))
+    pool = unique_sentences(texts, keep_short=True)
     scored = []
     for i, s in enumerate(pool):
         overlap = _overlap(q, s)
@@ -122,8 +130,7 @@ def classify(_question: str, store_context: list[str]) -> str:
 
 def summarize(chunks: list[str], points: int = 5) -> str:
     """Frequency summary: the sentences whose words are most common in the chapter."""
-    pool = [s for c in chunks for s in sentences(c)]
-    pool = list(dict.fromkeys(pool))            # chunks overlap by 40 words: drop repeats
+    pool = unique_sentences(chunks)
     freq = Counter(w for s in pool for w in tokens(s))
     scored = sorted(((sum(freq[w] for w in set(tokens(s))) / (len(tokens(s)) + 3) ** 0.5, i, s)
                      for i, s in enumerate(pool)), key=lambda x: (-x[0], x[1]))[:points]
@@ -132,7 +139,7 @@ def summarize(chunks: list[str], points: int = 5) -> str:
 
 def explain(selection: str, chunks: list[str]) -> str:
     keywords = [w for w, _n in Counter(tokens(selection)).most_common(4)]
-    pool = list(dict.fromkeys(s for c in chunks for s in sentences(c)))
+    pool = unique_sentences(chunks)
     sel = " ".join(selection.split())
     hit = next((i for i, s in enumerate(pool) if s in sel or sel[:40] in s), None)
     if hit is not None:                         # the sentences just before and after the selection
@@ -147,7 +154,7 @@ def explain(selection: str, chunks: list[str]) -> str:
 
 def define(word: str, chunks: list[str]) -> str:
     w = word.strip().lower()
-    uses = [s for c in chunks for s in sentences(c) if re.search(rf"\b{re.escape(w)}", s.lower())]
+    uses = [s for s in unique_sentences(chunks) if re.search(rf"\b{re.escape(w)}", s.lower())]
     if not uses:
         return f"'{word}' does not appear in this chapter's excerpts."
     return (f"'{word}' is used here: \"{uses[0]}\"\n(MOCK: no dictionary meaning without a "
@@ -157,7 +164,7 @@ def define(word: str, chunks: list[str]) -> str:
 def quiz(chunks: list[str], count: int = 3) -> str:
     """Fill-in-the-blank multiple-choice questions, as the JSON the SRS asks the LLM for:
     [{"q": ..., "options": [4 strings], "answer_index": 0-3}]."""
-    pool = list(dict.fromkeys(s for c in chunks for s in sentences(c) if 8 <= len(s.split()) <= 35))
+    pool = [s for s in unique_sentences(chunks) if 8 <= len(s.split()) <= 35]
     words = sorted({w for s in pool for w in re.findall(r"[A-Za-z]{5,}", s)
                     if w.lower() not in STOPWORDS}, key=str.lower)
     out, used = [], set()

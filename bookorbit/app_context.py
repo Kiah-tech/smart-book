@@ -16,6 +16,7 @@ from bookorbit.persistence.filestore import FileStore
 from bookorbit.services.auth import AuthService
 from bookorbit.services.catalog import CatalogService
 from bookorbit.services.chatbot import ChatbotService
+from bookorbit.services.companion import ReadingCompanion
 from bookorbit.services.moderation import ModerationEngine, TabooService
 from bookorbit.services.purchases import PurchaseService
 from bookorbit.services.ratings import RatingService
@@ -44,6 +45,7 @@ class AppContext:
     recs: RecommendationEngine
     rag: RAGRetriever              # SRS 4.21
     chatbot: ChatbotService        # SRS 4.20 (UC-12, UC-13)
+    companion: ReadingCompanion    # SRS 4.23 (UC-14)
     ai_ready: threading.Event = field(default_factory=threading.Event)   # set when indexing is done
 
 
@@ -65,7 +67,8 @@ def build_context(config: dict | None = None, data_dir: str | None = None) -> Ap
         config=cfg, fs=fs, bio=bio, llm=llm, auth=AuthService(fs, bio), status=status, wallet=wallet,
         purchases=purchases, taboo=taboo, moderation=moderation, warnings=warnings, ratings=ratings,
         reviews=reviews, catalog=CatalogService(fs, reviews, purchases=purchases),
-        recs=RecommendationEngine(fs), rag=rag, chatbot=ChatbotService(fs, rag, llm))
+        recs=RecommendationEngine(fs), rag=rag, chatbot=ChatbotService(fs, rag, llm),
+        companion=ReadingCompanion(fs, rag, llm, purchases))
 
 
 def build_ai_indexes(ctx: AppContext) -> None:
