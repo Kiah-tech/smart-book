@@ -59,7 +59,6 @@ def encode_wav(samples: np.ndarray, rate: int = 16000) -> bytes:
         wf.writeframes(pcm)
     return buf.getvalue()
 
-
 def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
     """Return (mono float samples, sample rate). Raises wave.Error / EOFError if unreadable."""
     with wave.open(io.BytesIO(data), "rb") as wf:
