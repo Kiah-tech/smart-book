@@ -31,7 +31,7 @@ class CatalogService:
         self.fs = fs
         self.reviews = reviews
         self.purchases = purchases    # PurchaseService: VIP price + "already owned" (UC-05 step 5)
-        self.covers = covers          # CoverIndex arrives in Phase 3 (UC-04 E5)
+        self.covers = covers          # CoverIndex (UC-04 step 4); None or not ready -> E5
 
     def categories(self) -> list[str]:
         return sorted({b["category"] for b in self.fs.load("books")})
@@ -79,11 +79,18 @@ class CatalogService:
         results.sort(key=lambda rb: (rb[0], rb[1]["title"].lower()))
         return [b for _, b in results]
 
-    def search_by_cover(self, image: bytes) -> list[dict]:
-        """UC-04 step 4. STUB in Phase 1: the cover model is not loaded yet (E5)."""
-        if self.covers is None:
-            raise ModelUnavailable("Cover search is not available yet (image model not loaded)")
-        raise NotImplementedError  # Phase 3
+    def search_by_cover(self, image: bytes) -> list[tuple[dict, float]]:
+        """UC-04 step 4: the (up to) 5 covers most similar to the photo, best first, with
+        their similarity. Raises ModelUnavailable (E5) or ValueError (E3, not an image).
+        Returns [] when even the best cover is below the threshold (E4); weaker matches
+        below it are dropped too (ASSUMPTIONS A-33)."""
+        if self.covers is None or not self.covers.ready:
+            raise ModelUnavailable("Cover search is not available (image model not loaded)")
+        hits = self.covers.query(self.covers.embed_bytes(image), rules.COVER_TOP_K)
+        if not hits or hits[0][1] < self.covers.min_sim:                # E4
+            return []
+        books = {b["book_id"]: b for b in self.fs.load("books")}
+        return [(books[bid], sim) for bid, sim in hits if sim >= self.covers.min_sim and bid in books]
 
     def get_details(self, book_id: str, session) -> dict:
         """Book + published reviews; records the view (UC-05)."""

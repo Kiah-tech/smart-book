@@ -13,8 +13,9 @@ Two implementations share one interface:
   tag written by seed.py, or for any other photo from the file's hash. For
   voice the "person" is the clip's dominant pitch (rounded to 10 Hz).
 * RealBiometricEngine (BIOMETRIC_MODE=real) - YOLOv8-face + FaceNet +
-  Resemblyzer. Not installed in Phase 1; constructing it raises
-  ModelUnavailable and the app falls back to the mock (see get_engine).
+  Resemblyzer. Written in Phase 3 but NOT installed or tested; without its
+  packages / weights it raises ModelUnavailable and get_engine falls back to
+  the labelled mock.
 """
 import hashlib
 import wave
@@ -143,20 +144,74 @@ class MockBiometricEngine(BiometricEngine):
 
 
 class RealBiometricEngine(BiometricEngine):
-    """YOLOv8-face + FaceNet + Resemblyzer (SRS 4.7). Planned for Phase 3."""
+    """YOLOv8-face + FaceNet + Resemblyzer (SRS 4.7). WRITTEN, NOT TESTED: the packages
+    (requirements-real.txt) and the YOLOv8 face weights are not installed in this prototype.
 
-    mode_label = "Real biometrics (camera / microphone)"
+    Capture stays file-based like the MOCK (the user picks a photo / WAV file), but the
+    embeddings come from the real models, so the R2 thresholds apply to real vectors.
+    Any missing package or weights file raises ModelUnavailable -> get_engine falls back
+    to the labelled MOCK."""
 
-    def __init__(self, fs):
+    mode_label = "Real biometrics: YOLOv8-face + FaceNet + Resemblyzer"
+
+    def __init__(self, fs, face_weights: str):
         super().__init__(fs)
-        raise ModelUnavailable("Real biometric models are not installed yet (Phase 3)")
+        try:                                              # lazy: only in BIOMETRIC_MODE=real
+            import torch
+            from facenet_pytorch import InceptionResnetV1
+            from resemblyzer import VoiceEncoder, preprocess_wav
+            from ultralytics import YOLO
+        except ImportError as e:
+            raise ModelUnavailable(f"Real biometric packages are not installed ({e.name})") from e
+        if not Path(face_weights).exists():
+            raise ModelUnavailable(f"YOLOv8 face weights not found: {face_weights}")
+        self.torch = torch
+        self.detector = YOLO(face_weights)
+        self.facenet = InceptionResnetV1(pretrained="vggface2").eval()
+        self.voice = VoiceEncoder()
+        self.preprocess_wav = preprocess_wav
+
+    def detect_face(self, image: bytes):
+        """Exactly one face, else NoFaceError (UC-01 E3, UC-02 E5)."""
+        import io
+        from PIL import Image
+        if not isinstance(image, (bytes, bytearray)) or not media.is_image(bytes(image)):
+            raise NoFaceError("Make sure only your face is visible (the file is not a JPG/PNG photo)")
+        img = Image.open(io.BytesIO(bytes(image))).convert("RGB")
+        boxes = self.detector(img, verbose=False)[0].boxes.xyxy.tolist()
+        if not boxes:
+            raise NoFaceError("No face found - make sure only your face is visible")
+        if len(boxes) > 1:
+            raise NoFaceError("Several faces found - make sure only your face is visible")
+        x1, y1, x2, y2 = (int(v) for v in boxes[0])
+        return img.crop((x1, y1, x2, y2))
+
+    def face_embedding(self, crop) -> np.ndarray:
+        x = np.asarray(crop.resize((160, 160)), dtype=np.float32)
+        x = (x - 127.5) / 128.0                           # FaceNet's expected input range
+        t = self.torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0)
+        with self.torch.no_grad():
+            v = self.facenet(t)[0].numpy().astype(float)  # 512 numbers
+        return v / np.linalg.norm(v)
+
+    def voice_embedding(self, audio: bytes) -> np.ndarray:
+        try:
+            samples, rate = media.decode_wav(bytes(audio))
+        except (wave.Error, EOFError, TypeError, ValueError) as exc:
+            raise NoVoiceError("Could not read the audio - please record again") from exc
+        if len(samples) / rate < rules.MIN_VOICE_SECONDS:
+            raise NoVoiceError("Recording too short - please speak for at least 2 seconds")
+        v = self.voice.embed_utterance(self.preprocess_wav(samples, source_sr=rate)).astype(float)  # 256
+        return v / np.linalg.norm(v)
 
 
-def get_engine(fs, mode: str = "mock") -> BiometricEngine:
-    """Return the configured engine, falling back to the MOCK when models are missing."""
+def get_engine(fs, mode: str = "mock", face_weights: str = "") -> BiometricEngine:
+    """Return the configured engine, falling back to the labelled MOCK when models are missing."""
     if mode == "real":
         try:
-            return RealBiometricEngine(fs)
-        except ModelUnavailable:
-            pass
+            return RealBiometricEngine(fs, face_weights)
+        except ModelUnavailable as e:
+            mock = MockBiometricEngine(fs)
+            mock.mode_label = f"MOCK biometrics (real models unavailable: {e})"
+            return mock
     return MockBiometricEngine(fs)

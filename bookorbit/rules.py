@@ -73,6 +73,11 @@ MAX_FACE_RETRIES = 3          # UC-01 E3
 # UC-04 - catalog paging
 PAGE_SIZE = 12
 
+# UC-04 step 4 / E4 - cover search: top 5 covers; best similarity below 0.25 = no match
+# (SRS value for OpenCLIP; the MOCK embedder has its own measured threshold, A-33)
+COVER_TOP_K = 5
+COVER_MIN_SIM = 0.25
+
 # UC-10 - review length
 REVIEW_MAX_CHARS = 1000
 

@@ -110,6 +110,8 @@ class MainWindow(tk.Tk):
         """Redraw the sidebar once the background indexing has finished."""
         if self.ctx.ai_ready.is_set():
             self.build_sidebar(self.active)
+            if hasattr(self.current, "on_ai_ready"):     # e.g. enable the camera button (UC-04)
+                self.current.on_ai_ready()
         else:
             self.after(300, self._poll_ai)
 

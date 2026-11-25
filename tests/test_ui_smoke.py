@@ -7,7 +7,7 @@ import unittest
 from bookorbit import rules
 from bookorbit.ai.biometrics import FACE
 from bookorbit.ui.main_window import SIDEBAR, MainWindow
-from seed import make_face_photo
+from seed import make_cover, make_cover_photo, make_face_photo
 from tests.helpers import TempStoreCase
 from tests.test_companion import TEXT as COMPANION_TEXT
 
@@ -18,6 +18,10 @@ class UISmokeTests(TempStoreCase):
         for i in range(15):
             self.add_book(title=f"Book {i:02d}", browse_count=i)
         self.text_book = self.add_text_book(COMPANION_TEXT, title="The Lighthouse Book")   # B-0016 (UC-14)
+        (self.fs.dir / "covers").mkdir(exist_ok=True)                    # covers for UC-04 cover search
+        for i, bid in enumerate(("B-0003", "B-0007", "B-0011")):
+            (self.fs.dir / "covers" / f"{bid}.png").write_bytes(make_cover(bid, i))
+            self.fs.update("books", "book_id", bid, {"cover_path": f"covers/{bid}.png"})
         self.ctx.auth.register("Pat", "pat", "p@x.com", make_face_photo("pat", 1, 0))
         try:
             self.win = MainWindow(self.ctx)
@@ -49,6 +53,7 @@ class UISmokeTests(TempStoreCase):
         self.win.run_async = lambda work, done: self.run_now(work, done)   # no worker threads in tests
         self.visit_all(rules.VISITOR)
         self.visitor_chat()
+        self.cover_search()
         session = self.ctx.auth.login("pat", FACE, make_face_photo("pat", 1, 1))
         self.win.on_login(session)
         self.visit_all(rules.RC)
@@ -81,6 +86,26 @@ class UISmokeTests(TempStoreCase):
         self.assertIn(question, chat.log.get("1.0", "end"))
         self.assertNotIn("…thinking", chat.log.get("1.0", "end"))
         return chat.last_response
+
+    def cover_search(self):
+        """UC-04 step 4 / E3 / E4 through the real CatalogScreen (file dialog skipped)."""
+        photo = self.fs.dir / "photo.jpg"
+        photo.write_bytes(make_cover_photo(self.fs.resolve("covers/B-0007.png").read_bytes(), 0))
+        self.win.show("home")
+        self.win.current.on_ai_ready()
+        self.assertEqual(str(self.win.current.cam[0]["state"]), "normal")     # index ready -> enabled
+        self.win.show("catalog", cover_file=str(photo))                        # what Home's camera does
+        cat = self.win.current
+        self.assertEqual(cat.results[0]["book_id"], "B-0007")
+        self.assertIn("Cover search with photo.jpg", cat.status.cget("text"))
+        (self.fs.dir / "notes.txt").write_text("not a picture")
+        cat.run_cover_search(str(self.fs.dir / "notes.txt"))                   # E3
+        self.assertIn("JPG or PNG", cat.banner.text)
+        face = self.fs.dir / "face.png"
+        face.write_bytes(make_face_photo("pat", 1, 0))
+        cat.run_cover_search(str(face))                                        # E4
+        self.assertEqual(cat.results, [])
+        self.win.update()
 
     def visitor_chat(self):
         self.assertEqual(self.chat("Tell me a joke").source, "DENIED")      # UC-12 E2

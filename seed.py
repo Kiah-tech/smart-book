@@ -128,6 +128,11 @@ BOOK_TEXTS = {
     "Paper Boats and Thunder": "paper_boats_and_thunder.txt",
 }
 
+# UC-04 cover search demo: "phone photos" of these covers go to data/samples/covers/
+COVER_PHOTOS = {"The Dragon Who Collected Maps": "photo_dragon_maps",
+                "The Clockmaker's Alibi": "photo_clockmakers_alibi",
+                "The Secret Life of Fungi": "photo_secret_life_of_fungi"}
+
 # Balances each customer ends the seed with (alice and victor deposit extra to pay for
 # their purchases first, so they end exactly here).
 END_BALANCE = {"alice": 50.0, "victor": 120.0, "wes": 20.0}
@@ -163,6 +168,21 @@ def make_cover(book_id: str, category_index: int) -> bytes:
     cx, cy, r = 20 + (h >> 8) % 80, 110 + (h >> 16) % 50, 14 + (h >> 24) % 18
     img[(xx - cx) ** 2 + (yy - cy) ** 2 < r * r] = _hue_rgb((hue + 0.5) % 1, 0.6, 0.95)
     return media.encode_png(img.astype(np.uint8), {"book_id": book_id})
+
+
+def make_cover_photo(cover_png: bytes, variant: int) -> bytes:
+    """A "phone photo" of a cover for UC-04 cover search: slightly cropped, tilted and
+    brighter or darker, on a grey table; variant 0 is saved as JPEG, 1 as PNG."""
+    import io
+    from PIL import Image, ImageEnhance
+    img = Image.open(io.BytesIO(cover_png)).convert("RGB")
+    w, h = img.size
+    img = img.crop((6, 8, w - 5, h - 7)).resize((240, 360))
+    img = ImageEnhance.Brightness(img).enhance(1.15 if variant == 0 else 0.85)
+    img = img.rotate(3 if variant == 0 else -2, expand=True, fillcolor=(205, 205, 200))
+    out = io.BytesIO()
+    img.save(out, "JPEG" if variant == 0 else "PNG", **({"quality": 70} if variant == 0 else {}))
+    return out.getvalue()
 
 
 def make_face_photo(person: str | None, faces: int, variant: int) -> bytes:
@@ -263,6 +283,16 @@ def main() -> None:
                 "rating_count": 0, "weighted_avg": 0.0, "list_status": rules.LIST_NONE,
                 "indexed": False, "added_at": ts(minute)})
             minute += 1
+
+    # sample photos for UC-04 cover search (data/samples/covers/)
+    cover_samples = samples / "covers"
+    cover_samples.mkdir()
+    by_title = {b["title"]: b for b in fs.load("books")}
+    for i, (title, name) in enumerate(COVER_PHOTOS.items()):
+        png = fs.resolve(by_title[title]["cover_path"]).read_bytes()
+        (cover_samples / f"{name}.{'jpg' if i % 2 == 0 else 'png'}").write_bytes(make_cover_photo(png, i % 2))
+    (cover_samples / "not_a_cover.png").write_bytes(make_face_photo(None, 0, 7))    # UC-04 E4
+    (cover_samples / "not_an_image.txt").write_text("This is not a picture.\n")       # UC-04 E3
 
     for word in TABOO_WORDS:
         fs.append("taboo_words", {"word": word, "added_by": su_id, "added_at": ts(minute)})

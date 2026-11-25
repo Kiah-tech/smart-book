@@ -17,6 +17,11 @@ DEFAULTS = {
     "OLLAMA_URL": "http://localhost:11434",
     "OLLAMA_MODEL": "llama3.2:3b",
     "OLLAMA_EMBED_MODEL": "nomic-embed-text",
+    # BIOMETRIC_MODE=real (SRS 4.7): YOLOv8 face-detector weights (not shipped with ultralytics)
+    "YOLO_FACE_WEIGHTS": str(PROJECT_ROOT / "models" / "yolov8n-face.pt"),
+    # COVER_MODE=real (SRS 4.9): OpenCLIP model and its pretrained weights
+    "OPENCLIP_MODEL": "ViT-B-32",
+    "OPENCLIP_PRETRAINED": "laion2b_s34b_b79k",
 }
 
 

@@ -7,13 +7,41 @@ from tkinter import filedialog, ttk
 
 from bookorbit import rules
 from bookorbit.ai.biometrics import FACE, VOICE
-from bookorbit.errors import (CompanionError, LoginError, NoFaceError, NotFound, NoVoiceError, PurchaseError, RegistrationError,
+from bookorbit.errors import (CompanionError, LoginError, ModelUnavailable, NoFaceError, NotFound, NoVoiceError, PurchaseError, RegistrationError,
                               TemplateMissingError)
 from bookorbit.services.catalog import FIELDS
 from bookorbit.ui.widgets import (CARD, FONT, GREEN, MUTED, NAVY, RED, Banner, BookCard, ScrollFrame, draw_cover,
                                   Tooltip, stars)
 
-COVER_SEARCH_TIP = "Cover-image search is disabled: the image model is not loaded (UC-04 E5). Arrives in Phase 3."
+COVER_TIP_WAIT = "Cover search is starting: the cover index is still being built."
+COVER_TIP_OFF = "Cover-image search is disabled: the image model is not loaded (UC-04 E5)."
+
+
+def cover_button(parent, ctx, on_click):
+    """The camera button of UC-04. Disabled with a tooltip while the cover index is being
+    built or when the image model is missing (E5); text search always works."""
+    cam = ttk.Button(parent, text="📷 Cover", command=on_click)
+    tip = Tooltip(cam, "")
+    sync_cover_button(cam, tip, ctx)
+    return cam, tip
+
+
+def sync_cover_button(cam, tip, ctx):
+    if ctx.covers.ready:
+        cam.configure(state="normal")
+        tip.text = "Search by a photo of a book cover (JPG or PNG)." + (
+            " " + ctx.covers.mode_label + "." if ctx.covers.is_mock else "")
+    else:
+        cam.configure(state="disabled")
+        tip.text = COVER_TIP_WAIT if not ctx.ai_ready.is_set() else COVER_TIP_OFF
+
+
+def pick_cover_photo(data_dir) -> str:
+    """Choose the photo to search with ("All files" too, so UC-04 E3 can be shown)."""
+    initial = Path(data_dir) / "samples" / "covers"
+    return filedialog.askopenfilename(title="Choose a photo of a book cover",
+                                      filetypes=[("Images", "*.png *.jpg *.jpeg"), ("All files", "*.*")],
+                                      initialdir=str(initial if initial.exists() else data_dir))
 
 
 class Screen(ttk.Frame):
@@ -41,8 +69,8 @@ class Screen(ttk.Frame):
         self.app.show("book", book_id=book_id)
 
 
-def search_bar(parent, on_search, initial=""):
-    """Search box + disabled camera button used on Home and Catalog (UC-04)."""
+def search_bar(parent, ctx, on_search, on_cover, initial=""):
+    """Search box + camera button used on Home and Catalog (UC-04)."""
     row = ttk.Frame(parent)
     entry = ttk.Entry(row, width=48, font=(FONT, 13))
     entry.insert(0, initial)
@@ -50,10 +78,9 @@ def search_bar(parent, on_search, initial=""):
     entry.bind("<Return>", lambda _e: on_search(entry.get()))
     ttk.Button(row, text="Search", style="Primary.TButton",
                command=lambda: on_search(entry.get())).pack(side="left", padx=6)
-    cam = ttk.Button(row, text="📷 Cover", state="disabled")
+    cam, tip = cover_button(row, ctx, on_cover)
     cam.pack(side="left")
-    Tooltip(cam, COVER_SEARCH_TIP)
-    return row, entry
+    return row, entry, (cam, tip)
 
 
 # ---------------------------------------------------------------- Home (UC-03, UC-06)
@@ -62,7 +89,8 @@ class HomeScreen(Screen):
         ttk.Label(self, text="Discover Your Next Favorite Book", style="H1.TLabel").pack(anchor="w")
         ttk.Label(self, text="Search by title, author, keyword or year.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 10))
-        row, _ = search_bar(self, lambda q: self.app.show("catalog", query=q, field="title"))
+        row, _, self.cam = search_bar(self, self.ctx, lambda q: self.app.show("catalog", query=q, field="title"),
+                                      self.on_cover)
         row.pack(anchor="w", pady=(0, 18))
 
         if self.session.role == rules.VC:
@@ -90,6 +118,14 @@ class HomeScreen(Screen):
             bal = self.ctx.wallet.get_balance(self.session.user["user_id"])
             ttk.Label(box, text=f"${bal:,.2f}", style="Card.TLabel", font=(FONT, 22, "bold")).pack(anchor="w")
             ttk.Button(box, text="Open My Balance", command=lambda: self.app.show("wallet")).pack(anchor="w", pady=4)
+
+    def on_cover(self):
+        path = pick_cover_photo(self.ctx.fs.dir)
+        if path:
+            self.app.show("catalog", cover_file=path)
+
+    def on_ai_ready(self):
+        sync_cover_button(*self.cam, self.ctx)
 
 
 # ---------------------------------------------------------------- Recommendations (UC-06, R4)
@@ -164,9 +200,8 @@ class CatalogScreen(Screen):
         ttk.Button(controls, text="Search", style="Primary.TButton",
                    command=self.run_search).grid(row=1, column=4, padx=(10, 0))
         ttk.Button(controls, text="Clear filters", command=self.clear).grid(row=1, column=5, padx=(6, 0))
-        cam = ttk.Button(controls, text="📷 Cover", state="disabled")
-        cam.grid(row=1, column=6, padx=(6, 0))
-        Tooltip(cam, COVER_SEARCH_TIP)
+        self.cam = cover_button(controls, self.ctx, self.on_cover)
+        self.cam[0].grid(row=1, column=6, padx=(6, 0))
         for cb in (self.category, self.sort):
             cb.bind("<<ComboboxSelected>>", lambda _e: self.run_search())
 
@@ -184,7 +219,37 @@ class CatalogScreen(Screen):
         self.next_btn.pack(side="left")
         if self.kwargs.get("focus_search"):
             self.query.focus_set()
-        self.run_search()
+        self.scores, self.cover_name = {}, None
+        if self.kwargs.get("cover_file"):            # camera button pressed on Home
+            self.run_cover_search(self.kwargs["cover_file"])
+        else:
+            self.run_search()
+
+    # ---- cover search (UC-04 step 4, E3-E5)
+    def on_cover(self):
+        path = pick_cover_photo(self.ctx.fs.dir)
+        if path:
+            self.run_cover_search(path)
+
+    def on_ai_ready(self):
+        sync_cover_button(*self.cam, self.ctx)
+
+    def run_cover_search(self, path):
+        self.banner.clear()
+        try:
+            data = Path(path).read_bytes()
+            hits = self.ctx.catalog.search_by_cover(data)
+        except ValueError as e:                  # E3: not a JPG / PNG
+            self.banner.show(str(e), "error")
+            return
+        except (ModelUnavailable, OSError) as e:  # E5 / unreadable file
+            self.banner.show(str(e), "error")
+            return
+        self.results = [b for b, _sim in hits]
+        self.scores = {b["book_id"]: sim for b, sim in hits}
+        self.cover_name = Path(path).name
+        self.page = 1
+        self.draw()
 
     def clear(self):
         self.category.set("All categories")
@@ -194,6 +259,7 @@ class CatalogScreen(Screen):
 
     def run_search(self):
         self.banner.clear()
+        self.scores, self.cover_name = {}, None
         self.query.configure(highlightbackground="#cfd5e1")
         cat = None if self.category.get() == "All categories" else self.category.get()
         q = self.query.get()
@@ -224,15 +290,24 @@ class CatalogScreen(Screen):
         total = len(self.results)
         pages = max(1, -(-total // rules.PAGE_SIZE))
         self.page = min(max(1, self.page), pages)
-        if total == 0:                           # UC-04 E1
+        if total == 0:                           # UC-04 E1 (and E4 for a cover photo)
             box = ttk.Frame(self.grid_frame, padding=30)
             box.pack()
-            ttk.Label(box, text="No books found", style="H2.TLabel").pack()
+            ttk.Label(box, text="No matching cover found" if self.cover_name else "No books found",
+                      style="H2.TLabel").pack()
             ttk.Button(box, text="Clear filters", command=self.clear).pack(pady=8)
         for i, b in enumerate(self.ctx.catalog.page(self.results, self.page)):
-            BookCard(self.grid_frame, b, self.open_book, self.images, self.ctx.fs.resolve(b["cover_path"])).grid(
-                row=i // 6, column=i % 6, padx=(0, 12), pady=(0, 12))
-        self.status.configure(text=f"{total} book(s) found")
+            cell = ttk.Frame(self.grid_frame)
+            cell.grid(row=i // 6, column=i % 6, padx=(0, 12), pady=(0, 12), sticky="n")
+            BookCard(cell, b, self.open_book, self.images, self.ctx.fs.resolve(b["cover_path"])).pack()
+            if b["book_id"] in self.scores:        # cover search: show how similar each cover is
+                ttk.Label(cell, text=f"{self.scores[b['book_id']]:.0%} similar", style="Muted.TLabel").pack()
+        if self.cover_name:
+            mock = f"  ({self.ctx.covers.mode_label})" if self.ctx.covers.is_mock else ""
+            self.status.configure(text=f"Cover search with {self.cover_name}: {total} match(es), "
+                                       f"most similar first{mock}")
+        else:
+            self.status.configure(text=f"{total} book(s) found")
         self.page_label.configure(text=f"Page {self.page} of {pages}")
         self.prev_btn.configure(state="normal" if self.page > 1 else "disabled")
         self.next_btn.configure(state="normal" if self.page < pages else "disabled")
