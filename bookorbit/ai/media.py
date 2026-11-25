@@ -19,10 +19,6 @@ def is_image(data: bytes) -> bool:
     return data.startswith(PNG_MAGIC) or data.startswith(JPEG_MAGIC)
 
 
-def _chunk(kind: bytes, payload: bytes) -> bytes:
-    crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
-    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
-
 
 def encode_png(pixels: np.ndarray, text: dict | None = None) -> bytes:
     """pixels: H x W x 3 uint8 array. text: optional tEXt key/value chunks."""
@@ -62,7 +58,6 @@ def encode_wav(samples: np.ndarray, rate: int = 16000) -> bytes:
         wf.setframerate(rate)
         wf.writeframes(pcm)
     return buf.getvalue()
-
 
 def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
     """Return (mono float samples, sample rate). Raises wave.Error / EOFError if unreadable."""
