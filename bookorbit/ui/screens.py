@@ -820,7 +820,7 @@ class ChatScreen(Screen):
         ex = ttk.Frame(self)
         ex.pack(anchor="w", pady=(0, 6))
         ttk.Label(ex, text="Try:", style="Muted.TLabel").pack(side="left")
-        for q in self.EXAMPLES[rules.VC if self.session.role == rules.VC else self.session.role]:
+        for q in self.EXAMPLES[rules.RC if self.session.role == rules.VC else self.session.role]:   # VC asks like RC
             ttk.Button(ex, text=q, command=lambda q=q: self.use_example(q)).pack(side="left", padx=(6, 0))
 
         self.log = tk.Text(self, height=20, wrap="word", font=(FONT, 12), state="disabled",

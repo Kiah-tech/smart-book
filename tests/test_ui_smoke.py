@@ -198,6 +198,7 @@ class UISmokeTests(TempStoreCase):
             self.buy(bid)
         self.assertEqual(self.win.session.role, rules.VC)
         self.assertIn("VIP", self.win.current.banner.text)
+        self.assertEqual(self.chat("Am I VIP?").source, "RAG")               # chat as a VIP Customer
         for name in ("orders", "my_reviews", "home"):
             self.win.show(name)
             self.win.update()
